@@ -67,11 +67,23 @@ public final class CliProcess {
     /**
      * 对齐 killCli()：Windows 用 taskkill /t /f 杀整棵进程树（fire-and-forget，不等待）；
      * 其他平台 destroy()（SIGTERM 语义）。
+     *
+     * 注意：{@link #taskkillArgs(long)} 只含参数部分（纯函数，CliProcessTest 钉住形状），
+     * 程序名 "taskkill" 必须在此拼为 ProcessBuilder 首元素——否则首元素 "/pid" 会被当作
+     * 可执行文件（CreateProcess error=2），IOException 回退 destroy() 只杀 cmd 外壳，
+     * 孙进程变孤儿并握住 stdout 管道，调用方 EOF 晚到数秒（Task 4 超时/取消测试暴露）。
+     * 输出重定向 DISCARD（对齐 TS stdio:'ignore'），不产生可能被 GC 关闭的未读管道。
      */
     public static void kill(Process child) {
         if (isWindows()) {
             try {
-                new ProcessBuilder(taskkillArgs(child.pid())).start();
+                List<String> command = new ArrayList<>();
+                command.add("taskkill");
+                command.addAll(taskkillArgs(child.pid()));
+                new ProcessBuilder(command)
+                        .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                        .redirectError(ProcessBuilder.Redirect.DISCARD)
+                        .start();
             } catch (IOException e) {
                 child.destroy(); // taskkill 起不来时退回直接杀，尽力清理
             }
