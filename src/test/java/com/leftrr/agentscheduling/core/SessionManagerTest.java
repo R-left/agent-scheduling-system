@@ -234,22 +234,27 @@ class SessionManagerTest {
     @Test
     void setWorkspaceDirClearsCliSessionIdAndSkipsSameValue() throws IOException {
         SupplierPair sp = counters();
-        SessionManager manager = new SessionManager(sp.now(), sp.createId(), null);
+        InMemoryStore store = new InMemoryStore(List.of());
+        SessionManager manager = new SessionManager(sp.now(), sp.createId(), store);
         Session session = manager.resolve(
                 address("om-1", "oc-1", "ot-1", null), CliId.CLAUDE, "dev", "D:/ws-old").session();
         manager.setCliSessionId(session.id(), "cli-abc");
 
+        int savesBeforeMove = store.saveCalls;
         Session moved = manager.setWorkspaceDir(session.id(), "D:/ws-new");
         assertEquals("D:/ws-new", moved.workspaceDir());
         assertNull(moved.cliSessionId()); // 对齐 TS 解构剔除 _previousCliSessionId
         assertEquals(session.status(), moved.status());
         assertNotEquals(session.updatedAt(), moved.updatedAt());
+        assertTrue(store.saveCalls > savesBeforeMove, "换值应触发持久化");
 
         // 同值 → 返回原实例，updatedAt 不变，不触发 persist
+        int savesBeforeSame = store.saveCalls;
         String before = moved.updatedAt();
         Session same = manager.setWorkspaceDir(session.id(), "D:/ws-new");
         assertSame(moved, same);
         assertEquals(before, same.updatedAt());
+        assertEquals(savesBeforeSame, store.saveCalls, "同值不落盘");
 
         IllegalArgumentException exEmpty = assertThrows(IllegalArgumentException.class,
                 () -> manager.setWorkspaceDir(session.id(), ""));

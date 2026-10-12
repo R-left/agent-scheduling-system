@@ -5,6 +5,7 @@ import com.leftrr.agentscheduling.cli.CliRunResult;
 import com.leftrr.agentscheduling.cli.JsText;
 
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -227,14 +228,16 @@ public final class Clarification {
         return null;
     }
 
-    /** 对齐 isClarificationOwner(flow, operator)：双方 union 均为非空串时比 union，否则比 openId。 */
+    /** 对齐 isClarificationOwner(flow, operator)：双方 union 均为非空串时比 union，否则比 openId（=== 语义）。 */
     public static boolean isClarificationOwner(String ownerOpenId, String ownerUnionId,
             String operatorOpenId, String operatorUnionId) {
         if (ownerUnionId != null && !ownerUnionId.isEmpty()
                 && operatorUnionId != null && !operatorUnionId.isEmpty()) {
             return ownerUnionId.equals(operatorUnionId);
         }
-        return ownerOpenId != null && ownerOpenId.equals(operatorOpenId);
+        // 对齐 TS `===`：null === null 亦为 true，不能用 != null && equals 短路
+        return ownerOpenId == null ? operatorOpenId == null
+                : ownerOpenId.equals(operatorOpenId);
     }
 
     public static String formatClarificationAnswers(ClarificationFlow flow) {
@@ -281,7 +284,7 @@ public final class Clarification {
 
         /** 同 (taskId, botId) 的旧流程全部删除（对齐 TS create 的全量清理；边迭代边删须用 Iterator.remove）。 */
         public ClarificationFlow create(CreateFlowOptions options) {
-            for (java.util.Iterator<Map.Entry<String, ClarificationFlow>> iterator =
+            for (Iterator<Map.Entry<String, ClarificationFlow>> iterator =
                     flows.entrySet().iterator(); iterator.hasNext(); ) {
                 ClarificationFlow flow = iterator.next().getValue();
                 if (flow.taskId().equals(options.taskId()) && flow.botId().equals(options.botId())) {

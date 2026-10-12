@@ -9,8 +9,10 @@ import com.leftrr.agentscheduling.cli.JsText;
 
 import java.io.IOException;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -218,7 +220,7 @@ public final class ProductSpec {
         URI uri;
         try {
             uri = new URI(node.asText());
-        } catch (java.net.URISyntaxException e) {
+        } catch (URISyntaxException e) {
             return null;
         }
         if (uri.getScheme() == null || uri.getHost() == null || uri.getPath() == null) {
@@ -232,7 +234,7 @@ public final class ProductSpec {
         try {
             Matcher matcher = DOC_TOKEN.matcher(new URI(documentUrl).getPath());
             return matcher.matches() ? matcher.group(1) : null;
-        } catch (java.net.URISyntaxException e) {
+        } catch (URISyntaxException e) {
             return null;
         }
     }
@@ -273,7 +275,7 @@ public final class ProductSpec {
 
     /** 对齐 .strict()：输入键集合必须与白名单完全一致。 */
     private static boolean exactlyKeys(JsonNode input, Set<String> allowed) {
-        Set<String> names = new java.util.LinkedHashSet<>();
+        Set<String> names = new LinkedHashSet<>();
         input.fieldNames().forEachRemaining(names::add);
         return allowed.equals(names);
     }
@@ -313,7 +315,7 @@ public final class ProductSpec {
         /** 对齐 findPendingByDocument()：Objects.equals 对齐 TS `===`（null==null 亦相等，实际不可达）。 */
         public ProductSpecFlow findPendingByDocument(String botId, String fileToken) {
             for (ProductSpecFlow flow : flows.values()) {
-                if (flow.botId().equals(botId)
+                if (Objects.equals(flow.botId(), botId)
                         && flow.status() == SpecStatus.PENDING
                         && flow.request() instanceof ProductSpecRequest.Lark lark
                         && Objects.equals(documentToken(lark.documentUrl()), fileToken)) {

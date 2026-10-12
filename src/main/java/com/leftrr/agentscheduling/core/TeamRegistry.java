@@ -69,7 +69,8 @@ public final class TeamRegistry {
 
     /**
      * 对齐 findMissingSkills()（TS async，本实现同步）。检测语义对齐 fs access：
-     * 路径存在（不要求是文件类型）即视为命中；检测中的 IO 异常按「不存在」处理（对齐 TS catch 继续）。
+     * 路径存在（不要求是文件类型）即视为命中，不查权限可达性；
+     * 检测中的 IO 异常按「不存在」处理（对齐 TS catch 继续）。
      */
     public List<MissingSkill> findMissingSkills() {
         List<MissingSkill> missing = new ArrayList<>();

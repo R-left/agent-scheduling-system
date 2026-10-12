@@ -193,8 +193,9 @@ public final class BotRegistry {
                                 .collect(Collectors.joining("、")));
         List<String> sections = List.of(
                 "你的角色：" + config.role(),
-                config.systemPrompt().trim(),
-                teamContext == null ? "" : teamContext.trim(),
+                // 对齐 TS 的 JS trim（ECMAScript 空白全集，含 NBSP/全角空格），非 Java String.trim
+                JsText.jsTrim(config.systemPrompt()),
+                teamContext == null ? "" : JsText.jsTrim(teamContext),
                 productDeliveryPolicy,
                 skillsSection,
                 feishuOutputPolicy,
@@ -250,7 +251,9 @@ public final class BotRegistry {
         int collaborationMaxRounds = 16; // zod default(16)
         JsonNode roundsNode = node.get("collaborationMaxRounds");
         if (roundsNode != null) {
-            if (!roundsNode.isIntegralNumber()
+            // 对齐 z.number().int()：JSON.parse 后 16.0 / 1e2 也是整数（JS Number 无整型区分），
+            // canConvertToExactIntegral 对浮点节点额外检查无小数部分
+            if (!roundsNode.canConvertToExactIntegral()
                     || roundsNode.asInt() < 1 || roundsNode.asInt() > 32) {
                 throw new IllegalArgumentException("collaborationMaxRounds 必须是 1 到 32 之间的整数");
             }

@@ -48,6 +48,11 @@ public final class JsonSessionStore implements SessionStore {
             return List.of(); // 对齐 readdir/readFile ENOENT → []
         }
         JsonNode rows = MAPPER.readTree(content);
+        if (rows == null || rows.isMissingNode()) {
+            // 对齐 TS：空文件 JSON.parse 抛 SyntaxError 直通（与非法 JSON 同为解析失败路径），
+            // 不走「会话文件格式错误」
+            throw new IOException("会话状态文件解析失败: " + filePath);
+        }
         if (!rows.isArray()) {
             throw new IOException("会话文件格式错误: " + filePath);
         }
@@ -98,7 +103,7 @@ public final class JsonSessionStore implements SessionStore {
         if (!needsBotId && !needsWorkspace) {
             return new Migration(row, false);
         }
-        ObjectNode candidate = ((ObjectNode) row).deepCopy(); // 浅拷贝即够（只增字段）
+        ObjectNode candidate = ((ObjectNode) row).deepCopy(); // deepCopy() 深拷贝，只增字段不改动原行
         if (needsBotId) {
             candidate.put("botId", legacyBotId);
         }

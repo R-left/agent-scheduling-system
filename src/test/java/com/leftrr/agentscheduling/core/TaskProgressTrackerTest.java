@@ -191,6 +191,35 @@ class TaskProgressTrackerTest {
         assertEquals(2, tracker.snapshot().activities().size());
     }
 
+    // 13. currentDetail 与活动 detail 空串对齐 TS falsy：省略字段（null）
+    @Test
+    void emptyDetailOmittedFromCurrentDetailAndActivity() {
+        var tracker = new TaskProgressTracker(new AtomicLong(1000)::get, null, false);
+        tracker.accept(start("t1", "Bash", "运行命令", ""));
+        var snap = tracker.accept(end("t1", false));
+        assertNull(snap.currentDetail(), "currentDetail 空串应省略");
+        assertNull(snap.activities().get(0).detail(), "活动 detail 空串应省略");
+        // 非空 detail 不受影响：active 在跑时 currentDetail 透传，结束后 activities 透传
+        var tracker2 = new TaskProgressTracker(new AtomicLong(1000)::get, null, false);
+        var started = tracker2.accept(start("t1", "Read", "读取文件", "a.md"));
+        assertEquals("a.md", started.currentDetail());
+        var ended = tracker2.accept(end("t1", false));
+        assertEquals("a.md", ended.activities().get(0).detail());
+    }
+
+    // 14. active.label null 回落兜底文案（?? 只回落 null/undefined），空串不回落
+    @Test
+    void nullActiveLabelFallsBackButEmptyDoesNot() {
+        var tracker = new TaskProgressTracker(new AtomicLong(1000)::get, null, false);
+        var snap = tracker.accept(start("t1", "Bash", null, "ls -la"));
+        assertEquals("正在分析执行结果", snap.current(), "label null 应回落兜底文案");
+        assertEquals(1, snap.toolCount());
+
+        var tracker2 = new TaskProgressTracker(new AtomicLong(1000)::get, null, false);
+        var snap2 = tracker2.accept(start("t1", "Bash", "", null));
+        assertEquals("", snap2.current(), "label 空串是合法值不回落");
+    }
+
     // 12. accept 返回值即当次 snapshot
     @Test
     void acceptReturnsCurrentSnapshot() {

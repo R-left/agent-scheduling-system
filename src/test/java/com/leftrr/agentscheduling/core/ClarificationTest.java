@@ -226,6 +226,10 @@ class ClarificationTest {
         assertTrue(Clarification.isClarificationOwner("ou-a", null, "ou-a", "union-y"));
         // operator union 空 → 比 openId（不等 false）
         assertFalse(Clarification.isClarificationOwner("ou-a", "union-x", "ou-b", null));
+        // 对齐 TS `===`：双方 openId 均 null → true；一方 null → false
+        assertTrue(Clarification.isClarificationOwner(null, null, null, null));
+        assertFalse(Clarification.isClarificationOwner(null, null, "ou-a", null));
+        assertFalse(Clarification.isClarificationOwner("ou-a", null, null, null));
     }
 
     // ===== 流程状态机 =====

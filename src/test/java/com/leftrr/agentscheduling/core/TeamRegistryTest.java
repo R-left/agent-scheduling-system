@@ -151,6 +151,7 @@ class TeamRegistryTest {
 
     @Test
     void findMissingSkillsReportsSearchedPathsAndAccumulates() {
+        // 与 TS 同假设：主目录下不存在同名 skill，user.home 指向真实主目录不影响判定
         String home = System.getProperty("user.home");
         BotRegistry.BotConfig first = config("qa", "测试工程师",
                 List.of("ghost-skill", "missing-one"), tempDir.resolve("qa-ws").toString());

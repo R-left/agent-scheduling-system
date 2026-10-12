@@ -193,7 +193,8 @@ public final class NativeSessions {
     // ---- Codex 分支（app-server JSON-RPC，阻塞式；FakeCli 可测）----
 
     /** 对齐 TS `message.id === 1` 严格判定：仅 JSON 整数参与比较
-     * （Jackson asInt 会把字符串 "1" 强转为 1，宽松判定会让非法应答推进协议）。 */
+     * （Jackson asInt 会把字符串 "1" 强转为 1，宽松判定会让非法应答推进协议）。
+     * id 是 JSON-RPC 任意正整数，本判定不限于 1，expected 由调用点按请求 id 传入。 */
     static boolean hasId(JsonNode message, int expected) {
         JsonNode id = message.path("id");
         return id.isInt() && id.asInt() == expected;

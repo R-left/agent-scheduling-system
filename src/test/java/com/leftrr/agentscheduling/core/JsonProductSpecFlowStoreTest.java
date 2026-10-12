@@ -93,6 +93,15 @@ class JsonProductSpecFlowStoreTest {
         assertEquals("产品方案状态文件格式错误: " + file, error.getMessage());
     }
 
+    // ---- 用例 2b：文件内容为非法 JSON 文本（非空）→ 解析异常透传（对齐 TS JSON.parse 抛错直通）----
+
+    @Test
+    void constructorPropagatesMalformedJsonParseError() throws IOException {
+        String file = path("spec-flows.json");
+        writeRaw(file, "not json {");
+        assertThrows(IOException.class, () -> new JsonProductSpecFlowStore(file));
+    }
+
     // ---- 用例 3：非法行跳过（对齐 flatMap + safeParse），合法行保留 ----
 
     @Test
@@ -117,6 +126,33 @@ class JsonProductSpecFlowStoreTest {
         assertNull(store.get("t4"), "approvedAt 非 ISO 应丢弃");
         assertNull(store.get("t5"), "ownerUnionId 空串应丢弃");
         assertNotNull(store.get("t6"), "合法行应保留");
+    }
+
+    // ---- 用例 3b：collaboration round/maxRounds 浮点整值通过（对齐 JSON.parse + z.number().int()）；
+    //      超 int 上界拒绝（Java 边界差：zod 可接受但 Java int 会回绕）----
+
+    @Test
+    void collaborationRoundAcceptsIntegralFloatsAndRejectsIntOverflow() throws IOException {
+        String requestJson = "{\"deliveryMode\":\"local\",\"title\":\"产品方案\",\"summary\":\"摘要内容\","
+                + "\"specPath\":\"specs/product.md\",\"ticketsPath\":\"tickets/list.md\"}";
+        String rowTemplate = "{\"token\":\"%s\",\"taskId\":\"task-1\",\"botId\":\"bot-leader\","
+                + "\"sessionId\":\"sess-%s\",\"ownerOpenId\":\"ou-%s\","
+                + "\"collaboration\":{\"taskId\":\"task-1\",\"fromBotId\":\"bot-x\","
+                + "\"reportToBotId\":\"bot-leader\",\"round\":%s,\"maxRounds\":%s},"
+                + "\"request\":" + requestJson + ",\"status\":\"pending\"}";
+
+        // 1.0 / 3.0 浮点整值 → 与 1 / 3 等同
+        String file = path("spec-float.json");
+        writeRaw(file, "[" + rowTemplate.formatted("t1", "t1", "t1", "1.0", "3.0") + "]");
+        JsonProductSpecFlowStore store = new JsonProductSpecFlowStore(file);
+        assertEquals(new Collaboration.CollaborationOrigin("task-1", "bot-x", "bot-leader", 1, 3),
+                store.get("t1").collaboration());
+
+        // 2147483648 超 int 上界 → 该行判非法丢弃
+        String overflowFile = path("spec-overflow.json");
+        writeRaw(overflowFile, "[" + rowTemplate.formatted("t2", "t2", "t2", "2147483648", "3") + "]");
+        JsonProductSpecFlowStore overflowStore = new JsonProductSpecFlowStore(overflowFile);
+        assertNull(overflowStore.get("t2"), "round 超 int 上界应丢弃该行");
     }
 
     // ---- 用例 4：合法文件加载往返（local 与 lark-doc 两条流程，含 collaboration、approvedAt）----

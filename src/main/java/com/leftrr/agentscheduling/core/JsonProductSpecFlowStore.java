@@ -42,11 +42,11 @@ public final class JsonProductSpecFlowStore extends ProductSpec.ProductSpecFlowS
 
     /** 对齐 TS mutate(operation: () => T)；Supplier.get 不允许抛受检异常，故自定函数式接口。 */
     @FunctionalInterface
-    private interface Iosupplier<T> {
+    private interface IoSupplier<T> {
         T get() throws IOException;
     }
 
-    private <T> T mutate(Iosupplier<T> operation) throws IOException {
+    private <T> T mutate(IoSupplier<T> operation) throws IOException {
         List<ProductSpecFlow> previous = snapshot();
         try {
             T result = operation.get();
@@ -143,13 +143,20 @@ public final class JsonProductSpecFlowStore extends ProductSpec.ProductSpecFlowS
         String reportToBotId = min1Text(node, "reportToBotId");
         JsonNode round = node.get("round");
         JsonNode maxRounds = node.get("maxRounds");
+        // z.number().int().positive() 经 JSON.parse 接受浮点整值（1.0 同 1，JS Number 无整型区分）。
+        // Java 边界差：zod 可接受超过 int 范围的整数，但 Java int 会回绕，故拒绝并按既有非法行处理（返回 null 丢弃该行）。
         if (taskId == null || fromBotId == null || reportToBotId == null
-                || round == null || !round.isIntegralNumber() || round.asLong() < 1
-                || maxRounds == null || !maxRounds.isIntegralNumber() || maxRounds.asLong() < 1) {
+                || !positiveIntValue(round) || !positiveIntValue(maxRounds)) {
             return null;
         }
         return new CollaborationOrigin(taskId, fromBotId, reportToBotId,
                 (int) round.asLong(), (int) maxRounds.asLong());
+    }
+
+    /** 数值为整数且落在 1..Integer.MAX_VALUE（对齐 z.number().int().positive() + Java int 上界）。 */
+    private static boolean positiveIntValue(JsonNode value) {
+        return value != null && value.canConvertToExactIntegral()
+                && value.asLong() >= 1 && value.asLong() <= Integer.MAX_VALUE;
     }
 
     private static String min1Text(JsonNode row, String field) {

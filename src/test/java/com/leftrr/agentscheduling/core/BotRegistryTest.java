@@ -324,6 +324,28 @@ class BotRegistryTest {
         }
     }
 
+    // ---------- 用例 9b：collaborationMaxRounds 浮点整值（对齐 JSON.parse + Number.isInteger） ----------
+
+    @Test
+    void acceptsIntegralFloatCollaborationMaxRounds() {
+        // 16.0 与 8e0 均为整数浮点值，z.number().int() 经 JSON.parse 接受
+        for (String raw : List.of("16.0", "8e0")) {
+            String config = """
+                    {
+                      "teamLeader": "leader",
+                      "bots": [
+                        {"id": "leader", "appIdEnv": "LEADER_APP_ID", "appSecretEnv": "LEADER_APP_SECRET",
+                         "defaultCli": "claude", "role": "r", "collaborationMaxRounds": %s}
+                      ]
+                    }
+                    """.formatted(raw);
+            BotRegistry.AgentOsConfig parsed = BotRegistry.parseAgentOsConfig(
+                    json(config), minimalEnv(), baseDir(tempDir));
+            assertEquals(raw.equals("16.0") ? 16 : 8, parsed.bots().get(0).collaborationMaxRounds(),
+                    "raw = " + raw);
+        }
+    }
+
     // ---------- 用例 10：bot id 重复（disabled 也查重） ----------
 
     @Test
@@ -526,6 +548,29 @@ class BotRegistryTest {
         IllegalArgumentException empty = assertThrows(IllegalArgumentException.class,
                 () -> BotRegistry.parseAgentOsConfig(json(emptyBots), minimalEnv(), baseDir(tempDir)));
         assertEquals("bots 至少需要配置一个", empty.getMessage());
+    }
+
+    // ---------- 用例 16b：defaultProductDeliveryMode 非字符串 / 非法值 ----------
+
+    @Test
+    void rejectsInvalidDefaultProductDeliveryMode() {
+        // 42（非字符串）、"bogus"（枚举外）、显式 null、true（非字符串）均拒绝，消息逐字
+        for (String raw : List.of("42", "\"bogus\"", "null", "true")) {
+            String config = """
+                    {
+                      "teamLeader": "leader",
+                      "defaultProductDeliveryMode": %s,
+                      "bots": [
+                        {"id": "leader", "appIdEnv": "LEADER_APP_ID", "appSecretEnv": "LEADER_APP_SECRET",
+                         "defaultCli": "claude", "role": "r"}
+                      ]
+                    }
+                    """.formatted(raw);
+            IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                    () -> BotRegistry.parseAgentOsConfig(json(config), minimalEnv(), baseDir(tempDir)),
+                    "raw = " + raw);
+            assertEquals("defaultProductDeliveryMode 只能是 local 或 lark-doc", ex.getMessage());
+        }
     }
 
     // ---------- 用例 17：parseBotConfigs 返回 bots 列表 ----------

@@ -129,6 +129,18 @@ class JsonSessionStoreTest {
         assertThrows(IOException.class, () -> writeRawAndLoad(store, file, "not json {"));
     }
 
+    // ---- 用例 5b：空文件 → IOException（对齐 TS JSON.parse SyntaxError 直通，非「格式错误」路径）----
+
+    @Test
+    void loadRejectsEmptyFileAsParseFailureNotFormatError() {
+        String file = path("sessions.json");
+        JsonSessionStore store = new JsonSessionStore(file);
+        IOException error = assertThrows(IOException.class,
+                () -> writeRawAndLoad(store, file, ""));
+        assertFalse(error.getMessage().contains("格式错误"),
+                "空文件应走解析失败路径而非「格式错误」: " + error.getMessage());
+    }
+
     // ---- 用例 6：旧格式迁移：缺 botId 与 workspaceDir → 补默认值并回写 ----
 
     @Test

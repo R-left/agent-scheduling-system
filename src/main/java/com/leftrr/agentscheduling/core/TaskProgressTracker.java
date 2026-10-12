@@ -53,7 +53,10 @@ public final class TaskProgressTracker {
             ActiveTool tool = activeTools.remove(e.toolUseId());
             if (tool != null) {
                 completedCount += 1;
-                activities.add(0, new TaskActivity(tool.toolName(), tool.label(), tool.detail(),
+                // 对齐 TS `...(tool.detail ? { detail: tool.detail } : {})`：空串为 falsy → 省略字段（null）
+                String detail = tool.detail() != null && !tool.detail().isEmpty()
+                        ? tool.detail() : null;
+                activities.add(0, new TaskActivity(tool.toolName(), tool.label(), detail,
                         Math.max(0, now.getAsLong() - tool.startedAt()), e.failed()));
                 if (activities.size() > ACTIVITY_LIMIT) {
                     activities.subList(ACTIVITY_LIMIT, activities.size()).clear(); // 对齐 splice(12)
@@ -68,13 +71,16 @@ public final class TaskProgressTracker {
         for (ActiveTool tool : activeTools.values()) {
             active = tool; // 对齐 [...values()].at(-1)
         }
-        String current = active != null
+        // 对齐 TS `active?.label ?? 兜底文案`：?? 只回落 null/undefined（label 为 null 回落，空串不回落）
+        String current = active != null && active.label() != null
                 ? active.label()
                 : toolCount > 0 ? "正在分析执行结果" : "正在理解任务";
         return new TaskProgressSnapshot(
                 current,
                 active != null ? active.toolName() : null,
-                active != null && active.detail() != null ? active.detail() : null,
+                // 对齐 TS `...(active?.detail ? { currentDetail } : {})`：空串为 falsy → 省略字段（null）
+                active != null && active.detail() != null && !active.detail().isEmpty()
+                        ? active.detail() : null,
                 Math.max(0, now.getAsLong() - startedAt),
                 toolCount,
                 completedCount,
