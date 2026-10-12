@@ -1,5 +1,7 @@
 package com.leftrr.agentscheduling.cli;
 
+import com.fasterxml.jackson.annotation.JsonValue;
+
 import java.util.Optional;
 
 /**
@@ -16,7 +18,8 @@ public enum CliId {
         this.id = id;
     }
 
-    /** 小写标识串，持久化与 JSON 序列化均使用该值，与 TS 版一致。 */
+    /** 小写标识串，持久化与 JSON 序列化均使用该值，与 TS 版一致（M3 Task 4：会话持久化需要）。 */
+    @JsonValue
     public String id() {
         return id;
     }
