@@ -21,6 +21,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import static com.leftrr.agentscheduling.mcp.McpTestFixtures.clarifyArgs;
+import static com.leftrr.agentscheduling.mcp.McpTestFixtures.option;
+import static com.leftrr.agentscheduling.mcp.McpTestFixtures.question;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -55,8 +58,6 @@ class StdioSessionTest {
     private static final long AWAIT_TIMEOUT_MS = 10_000;
 
     private static final String CLARIFY_RECEIPT_1 = "已把 1 个问题交给 Agent OS，请等待用户回答。";
-    private static final String CLARIFY_REJECTION =
-            "入参未通过 Agent OS 校验，本次 request_clarification 调用已被拒绝。";
 
     // ------------------------------------------------------------------
     // 用例 1：initialize 握手
@@ -162,7 +163,7 @@ class StdioSessionTest {
                     "SDK 结构校验拒绝形态为 CallToolResult(isError=true)，实测: " + result);
             String text = result.path("content").get(0).path("text").asText();
             assertFalse(text.equals(CLARIFY_RECEIPT_1), "结构拒绝不得回执成功文案");
-            assertFalse(text.equals(CLARIFY_REJECTION), "拒绝发生在 SDK 校验层，先于 handler 的 core 复校验");
+            assertFalse(text.equals(AppToolsServer.CLARIFICATION_REJECTION), "拒绝发生在 SDK 校验层，先于 handler 的 core 复校验");
         }
     }
 
@@ -339,26 +340,5 @@ class StdioSessionTest {
         params.put("name", tool);
         params.set("arguments", JACKSON2.valueToTree(arguments));
         return node;
-    }
-
-    private static Map<String, Object> clarifyArgs(Map<String, Object>... questions) {
-        Map<String, Object> args = new LinkedHashMap<>();
-        args.put("questions", List.of(questions));
-        return args;
-    }
-
-    private static Map<String, Object> question(String id) {
-        Map<String, Object> question = new LinkedHashMap<>();
-        question.put("id", id);
-        question.put("prompt", "方向？");
-        question.put("options", List.of(option("opt_a", "方案 A"), option("opt_b", "方案 B")));
-        return question;
-    }
-
-    private static Map<String, Object> option(String id, String label) {
-        Map<String, Object> option = new LinkedHashMap<>();
-        option.put("id", id);
-        option.put("label", label);
-        return option;
     }
 }

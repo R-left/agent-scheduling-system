@@ -83,7 +83,8 @@ public final class AppToolsServer {
      * （如 '同一道问题的选项 ID 不能重复'），issue 文案逐条随入参变化，无统一逐字文案可对齐；
      * Java 侧文案自拟，只对齐形态（isError=true + 一条 text content，设计裁决 1）。
      */
-    private static final String CLARIFICATION_REJECTION =
+    /** 包级可见：StdioSessionTest 直接引用，避免测试侧逐字复制文案（M5 修复波次）。 */
+    static final String CLARIFICATION_REJECTION =
             "入参未通过 Agent OS 校验，本次 request_clarification 调用已被拒绝。";
     private static final String PRODUCT_SPEC_REJECTION =
             "入参未通过 Agent OS 校验，本次 request_spec_approval 调用已被拒绝。";

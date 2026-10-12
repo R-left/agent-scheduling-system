@@ -23,6 +23,9 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import static com.leftrr.agentscheduling.mcp.McpTestFixtures.clarifyArgs;
+import static com.leftrr.agentscheduling.mcp.McpTestFixtures.option;
+import static com.leftrr.agentscheduling.mcp.McpTestFixtures.question;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -421,27 +424,6 @@ class AppToolsServerTest {
         List<String> values = new ArrayList<>();
         arrayNode.forEach(value -> values.add(value.asText()));
         return values;
-    }
-
-    private static Map<String, Object> option(String id, String label) {
-        Map<String, Object> option = new LinkedHashMap<>();
-        option.put("id", id);
-        option.put("label", label);
-        return option;
-    }
-
-    private static Map<String, Object> question(String id) {
-        Map<String, Object> question = new LinkedHashMap<>();
-        question.put("id", id);
-        question.put("prompt", "方向？");
-        question.put("options", List.of(option("opt_a", "方案 A"), option("opt_b", "方案 B")));
-        return question;
-    }
-
-    private static Map<String, Object> clarifyArgs(Map<String, Object>... questions) {
-        Map<String, Object> args = new LinkedHashMap<>();
-        args.put("questions", List.of(questions));
-        return args;
     }
 
     private static Map<String, Object> localSpecArgs() {
