@@ -6,6 +6,7 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -29,9 +30,12 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
  *   app-server:<file>      模拟 codex app-server JSON-RPC（脚本 JSON：见下）
  * app-server 脚本字段：
  *   list       thread/list 的 result 载荷（对象）
- *   listError  设置后 thread/list 回 {"error":{"message":...}}
+ *   listError  设置后 thread/list 回 {"error":<listError>}（有无 message 均回错误）
  *   compactNotifications  thread/compact/start 后逐行原样打印的 JSON 文本数组
  *   resumeError           设置后 thread/resume 回 error
+ *   record     设置后把收到的每行 JSON 追加写入该文件（协议序列断言用）
+ *   stall      设置后 thread/list 不应答（模拟 app-server 挂起，测超时）
+ *   exitAfterInit  设置后 initialize 回复完毕即以该值退出（测提前退出）
  */
 public final class FakeCli {
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -100,9 +104,14 @@ public final class FakeCli {
 
     private static int appServer(String scriptPath) throws Exception {
         JsonNode script = MAPPER.readTree(Files.readString(Path.of(scriptPath), StandardCharsets.UTF_8));
+        Path recordPath = script.hasNonNull("record") ? Path.of(script.get("record").asText()) : null;
         BufferedReader in = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8));
         String line;
         while ((line = in.readLine()) != null) {
+            if (recordPath != null) {
+                Files.writeString(recordPath, line + "\n", StandardCharsets.UTF_8,
+                        StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+            }
             JsonNode message = MAPPER.readTree(line);
             if (!message.has("method")) {
                 continue;
@@ -110,10 +119,18 @@ public final class FakeCli {
             String method = message.path("method").asText();
             int id = message.path("id").asInt(0);
             switch (method) {
-                case "initialize" -> reply(id, MAPPER.createObjectNode());
+                case "initialize" -> {
+                    reply(id, MAPPER.createObjectNode());
+                    if (script.hasNonNull("exitAfterInit")) {
+                        return script.get("exitAfterInit").asInt(0);
+                    }
+                }
                 case "thread/list" -> {
+                    if (script.path("stall").asBoolean(false)) {
+                        continue; // 不应答，模拟 app-server 挂起（超时测试用）
+                    }
                     JsonNode err = script.get("listError");
-                    if (err != null && err.has("message")) {
+                    if (err != null) {
                         ObjectNode error = MAPPER.createObjectNode();
                         error.set("error", err);
                         System.out.println(MAPPER.writeValueAsString(error));
