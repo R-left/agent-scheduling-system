@@ -40,8 +40,9 @@ class WorkspaceTest {
         // 语义对齐 Node：以 / 或 \ 开头即视为绝对路径（挂到当前盘符根）。
         String result = Workspace.resolveWorkspacePath("/workspaces/bot", tempDir.toString());
         assertTrue(Path.of(result).isAbsolute());
-        assertTrue(result.endsWith("workspaces")
-                || result.endsWith("workspaces\\") || result.contains("workspaces"));
+        // 必须挂在 base 所在盘符的根，而非系统当前盘符根
+        assertEquals(tempDir.getRoot(), Path.of(result).getRoot());
+        assertEquals(tempDir.getRoot().resolve("workspaces").resolve("bot").toString(), result);
     }
 
     @Test

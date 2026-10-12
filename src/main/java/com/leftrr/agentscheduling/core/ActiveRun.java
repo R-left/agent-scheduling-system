@@ -22,6 +22,10 @@ public final class ActiveRun {
         return ownerOpenId;
     }
 
+    /**
+     * 警告：cancelMode 在 {@code token.cancel()} 触发的全部取消监听器执行完毕之后才可见；
+     * 取消回调（onCancel）内读取本方法恒为 null，禁止在回调中依赖它。
+     */
     public CancelMode cancelMode() {
         return cancelMode;
     }

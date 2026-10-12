@@ -7,6 +7,8 @@ import java.util.regex.Pattern;
 /**
  * 工作目录路径解析与存在性校验。对应 TS 版 src/core/workspace.ts。
  * 语义对齐 Node path.win32/posix：以 / 或 \ 开头即视为绝对路径。
+ * 已知分歧：drive-relative 输入（如 C:work，盘符无分隔符）Java 按 base 相对解析，
+ * Node win32 按该盘符进程 cwd 解析；真实输入几乎不会出现。
  */
 public final class Workspace {
     private static final Pattern DRIVE_ABSOLUTE = Pattern.compile("^[A-Za-z]:[\\\\/].*$");

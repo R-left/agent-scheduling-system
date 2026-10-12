@@ -10,7 +10,6 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CommandParserTest {
     @Test
@@ -70,5 +69,19 @@ class CommandParserTest {
         // JS 的 \s 匹配 NBSP(\u00a0)，Java 需 UNICODE_CHARACTER_CLASS 对齐
         assertEquals(Optional.of(new SimpleCommand(SimpleCommand.SimpleName.HELP)),
                 CommandParser.parseCommand("@助手\u00a0/help"));
+    }
+
+    @Test
+    void trimsNbspAroundCommandLikeJavaScript() {
+        // JS trim 剥 NBSP( )，Java String.trim() 只剥 ≤ U+0020 —— jsTrim 对齐 ECMAScript
+        assertEquals(Optional.of(new SimpleCommand(SimpleCommand.SimpleName.STATUS)),
+                CommandParser.parseCommand(" /status "));
+    }
+
+    @Test
+    void trimsTrailingNbspOnCliRequestPrompt() {
+        // 尾部 NBSP 应被剥掉：与 "/claude " 行为一致，group(2) 无内容 → prompt 空串
+        assertEquals(Optional.of(new CliRequest(CliId.CLAUDE, "")),
+                CommandParser.parseCliRequest("/claude "));
     }
 }

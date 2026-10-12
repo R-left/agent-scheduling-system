@@ -2,10 +2,18 @@ package com.leftrr.agentscheduling.core;
 
 import java.util.Map;
 
+/**
+ * 任务中止纯逻辑。对应 TS 版 src/core/task-abort.ts 的 requestTaskAbort。
+ */
 public final class TaskAbort {
     private TaskAbort() {
     }
 
+    /**
+     * 时序契约：cancelMode 在 {@code token.cancel()} 触发的全部取消监听器执行完毕之后
+     * 才可见；取消回调（onCancel）内读取 {@link ActiveRun#cancelMode()} 恒为 null，
+     * 禁止在回调中依赖它。
+     */
     public static AbortTaskOutcome requestTaskAbort(
             Map<String, ActiveRun> activeRuns,
             String sessionId,
