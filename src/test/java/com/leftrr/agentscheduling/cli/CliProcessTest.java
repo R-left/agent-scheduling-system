@@ -9,6 +9,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -76,17 +77,46 @@ class CliProcessTest {
     @Test
     void spawn后kill能终止进程树(@TempDir Path tmpDir) throws Exception {
         assumeTrue(CliProcess.isWindows());
-        // FakeCliCommand.command() 返回完整列表：[java, -cp, <cp>, FakeCli, hang:5000]
+        // FakeCliCommand.command() 返回完整列表：[java, -cp, <cp>, FakeCli, hang:30000]
         // spawn(command, args, cwd) 第一参是命令、其余是参数列表 → 拆成 command + rest
-        List<String> full = FakeCliCommand.command("hang:5000");
+        List<String> full = FakeCliCommand.command("hang:30000");
         Process child = CliProcess.spawn(full.get(0), full.subList(1, full.size()), tmpDir.toString());
-        assertTrue(child.isAlive(), "hang:5000 模式下子进程应存活");
+        assertTrue(child.isAlive(), "hang 模式下子进程应存活");
+        // 杀树前等 cmd 外壳 spawn 出 java 孙进程（descendants 非空），把 /t 树级语义真正钉住：
+        // 若只杀 cmd 外壳，孙进程将存活到自然退出，下方后代断言即失败
+        List<Long> treePids = new ArrayList<>();
+        for (int i = 0; i < 100; i++) {
+            child.descendants().forEach(handle -> treePids.add(handle.pid()));
+            if (!treePids.isEmpty()) {
+                break;
+            }
+            Thread.sleep(100);
+        }
+        assertFalse(treePids.isEmpty(), "10s 内应观测到孙进程（cmd 外壳 spawn 的 java），否则无法验证树级 kill");
         CliProcess.kill(child);
         // Windows 上 taskkill /t /f 杀进程树；给足超时避免偶发慢
         assertTrue(child.waitFor(10, TimeUnit.SECONDS), "kill 后子进程应在超时内退出");
         // 被 taskkill 强杀，退出码非 0
         int exit = child.waitFor();
         assertNotEquals(0, exit, "被杀进程退出码应非 0，实际: " + exit);
+        // 所有后代进程全部不再存活（给 taskkill 短暂收尾窗口再终判）
+        for (int i = 0; i < 50; i++) {
+            boolean anyAlive = false;
+            for (long pid : treePids) {
+                if (ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false)) {
+                    anyAlive = true;
+                    break;
+                }
+            }
+            if (!anyAlive) {
+                break;
+            }
+            Thread.sleep(100);
+        }
+        for (long pid : treePids) {
+            assertFalse(ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false),
+                    "孙进程 " + pid + " 应被进程树级 kill 清理");
+        }
     }
 
     @Test

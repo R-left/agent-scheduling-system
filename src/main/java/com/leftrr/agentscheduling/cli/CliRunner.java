@@ -94,56 +94,70 @@ public final class CliRunner {
         CliRunResult finalResult = null;
         String resultError = null;
 
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(child.getInputStream(), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                for (CliEvent event : o.adapter().parseEvents(line)) {
-                    if (o.onEvent() != null) {
-                        o.onEvent().accept(event);
-                    }
-                    if (event instanceof CliEvent.SessionEvent s) {
-                        observedSessionId = s.sessionId();
-                    } else if (event instanceof CliEvent.ErrorEvent e) {
-                        resultError = e.message();
-                        continue;
-                    } else if (event instanceof CliEvent.ToolCallEvent c) {
-                        observedToolCalls.put(c.toolUseId(),
-                                new CliRunResult.ToolCall(c.toolUseId(), c.toolName(), c.input()));
-                        continue;
-                    } else if (event instanceof CliEvent.ToolEndEvent end && end.failed()) {
-                        observedToolCalls.remove(end.toolUseId());
-                        continue;
-                    } else if (event instanceof CliEvent.StatsEvent st) {
-                        observedStats = st.stats();
-                        if (finalResult != null && finalResult.stats() == null) {
-                            finalResult = withStats(finalResult, st.stats());
+        int code;
+        try {
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(child.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    for (CliEvent event : o.adapter().parseEvents(line)) {
+                        if (o.onEvent() != null) {
+                            o.onEvent().accept(event);
                         }
-                        continue;
-                    } else if (event instanceof CliEvent.ResultEvent r) {
-                        if (r.answer() != null && !r.answer().isEmpty()) {
-                            observedAnswer = r.answer();
-                        }
-                        if (r.stats() != null) {
-                            observedStats = r.stats();
-                        }
-                        if (observedAnswer == null || observedAnswer.isEmpty()) {
+                        // 任何携带 sessionId 的事件都更新观测（TS runner.ts:88，含 error/result）
+                        observedSessionId = observeSessionId(observedSessionId, event);
+                        if (event instanceof CliEvent.ErrorEvent e) {
+                            resultError = e.message();
                             continue;
+                        } else if (event instanceof CliEvent.ToolCallEvent c) {
+                            observedToolCalls.put(c.toolUseId(),
+                                    new CliRunResult.ToolCall(c.toolUseId(), c.toolName(), c.input()));
+                            continue;
+                        } else if (event instanceof CliEvent.ToolEndEvent end && end.failed()) {
+                            observedToolCalls.remove(end.toolUseId());
+                            continue;
+                        } else if (event instanceof CliEvent.StatsEvent st) {
+                            observedStats = st.stats();
+                            if (finalResult != null && finalResult.stats() == null) {
+                                finalResult = withStats(finalResult, st.stats());
+                            }
+                            continue;
+                        } else if (event instanceof CliEvent.ResultEvent r) {
+                            if (r.answer() != null && !r.answer().isEmpty()) {
+                                observedAnswer = r.answer();
+                            }
+                            if (r.stats() != null) {
+                                observedStats = r.stats();
+                            }
+                            if (observedAnswer == null || observedAnswer.isEmpty()) {
+                                continue;
+                            }
+                            finalResult = new CliRunResult(observedAnswer,
+                                    r.sessionId() != null ? r.sessionId() : observedSessionId,
+                                    observedStats, null);
                         }
-                        finalResult = new CliRunResult(observedAnswer,
-                                r.sessionId() != null ? r.sessionId() : observedSessionId,
-                                observedStats, null);
                     }
                 }
             }
-        }
-        int code = child.waitFor();
-        stdinWriter.join();
-        stderrPump.join();
-        timer.cancel(false);
-        scheduler.shutdownNow();
-        if (cancelReg != null) {
-            cancelReg.remove();
+            code = child.waitFor();
+            stdinWriter.join();
+            stderrPump.join();
+        } catch (InterruptedException e) {
+            // 中断路径：先杀进程树再恢复中断标记，防孤儿；中断语义向调用方透传
+            CliProcess.kill(child);
+            Thread.currentThread().interrupt();
+            throw e;
+        } finally {
+            // 所有路径统一收尾：调度器关闭 + 取消注册移除；parseEvents/onEvent 抛
+            // RuntimeException 等异常路径下子进程仍存活时连树杀掉，防孤儿泄漏
+            timer.cancel(false);
+            scheduler.shutdownNow();
+            if (cancelReg != null) {
+                cancelReg.remove();
+            }
+            if (child.isAlive()) {
+                CliProcess.kill(child);
+            }
         }
 
         // 终态判定优先级对齐 TS：timeout → cancelled → error 事件 → 退出码 → 无结果
@@ -173,6 +187,23 @@ public final class CliRunner {
                     finalResult.stats(), List.copyOf(observedToolCalls.values()));
         }
         return finalResult;
+    }
+
+    /**
+     * TS runner.ts:88 —— 任何携带 sessionId 的事件（session/error/result）都更新观测值，
+     * sessionId 为 null 的事件不覆盖现有观测。
+     */
+    static String observeSessionId(String current, CliEvent event) {
+        if (event instanceof CliEvent.SessionEvent s && s.sessionId() != null) {
+            return s.sessionId();
+        }
+        if (event instanceof CliEvent.ErrorEvent e && e.sessionId() != null) {
+            return e.sessionId();
+        }
+        if (event instanceof CliEvent.ResultEvent r && r.sessionId() != null) {
+            return r.sessionId();
+        }
+        return current;
     }
 
     private static long withDefault(Long timeoutMs) {

@@ -359,4 +359,23 @@ class CliRunnerTest {
         CliRunResult result = run(new TestAdapter("emit:" + f));
         assertEquals("obs-1", result.sessionId());
     }
+
+    // ---------- 14. 任意携带 sessionId 的事件都更新观测（TS runner.ts:88） ----------
+
+    /**
+     * error 事件在终态判定必然抛异常，sessionId 无法经 run() 公开观测，
+     * 故在包私有 observeSessionId 缝隙上钉住；run() 内的接线由用例 13
+     * （result 回填已观测 sessionId）回归覆盖。
+     */
+    @Test
+    void error与result事件携带sessionId也更新观测() {
+        assertEquals("err-1", CliRunner.observeSessionId("s0",
+                new CliEvent.ErrorEvent("坏了", "err-1")));
+        assertEquals("res-1", CliRunner.observeSessionId("s0",
+                new CliEvent.ResultEvent("答案", "res-1", null)));
+        // 无 sessionId 的事件不覆盖现有观测
+        assertEquals("s0", CliRunner.observeSessionId("s0", new CliEvent.ErrorEvent("坏了", null)));
+        assertEquals("s0", CliRunner.observeSessionId("s0", new CliEvent.SessionEvent(null)));
+        assertEquals("s0", CliRunner.observeSessionId("s0", new CliEvent.StatsEvent(null)));
+    }
 }
