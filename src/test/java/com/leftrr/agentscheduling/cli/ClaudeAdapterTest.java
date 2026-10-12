@@ -191,6 +191,17 @@ class ClaudeAdapterTest {
     }
 
     @Test
+    void fixture11cResultStringIsErrorTakesSuccessBranch() {
+        // TS `if (event.is_error)` 为 truthy 判定：字符串 "true" 等真值在 TS 也会触发 error 事件；
+        // Java 侧刻意采用严格布尔判定（已知分歧，ClaudeAdapter 注释备查），字符串 "true" 不触发
+        // ErrorEvent——注意期望不是空列表，result 文本合法时成功分支照常产出 ResultEvent
+        String line = "{\"type\":\"result\",\"is_error\":\"true\",\"result\":\"出错了\",\"session_id\":\"s1\"}";
+        assertEquals(
+                List.of(new CliEvent.ResultEvent("出错了", "s1", null)),
+                adapter.parseEvents(line));
+    }
+
+    @Test
     void fixture12ResultSuccessCarriesFullStats() {
         String line = "{\"type\":\"result\",\"result\":\"答案\",\"session_id\":\"s1\","
                 + "\"duration_ms\":100,\"num_turns\":2,"

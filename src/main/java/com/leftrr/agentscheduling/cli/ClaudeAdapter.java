@@ -138,7 +138,10 @@ public final class ClaudeAdapter implements CliAdapter {
         if (!"result".equals(text(event, "type"))) {
             return List.of();
         }
-        // 对齐 TS `is_error === true`：字符串 "true" 等非布尔值不触发 error 事件
+        // TS `if (event.is_error)` 为 truthy 判定：字符串 "true" 等真值在 TS 也会触发 error 事件；
+        // Java 侧刻意采用严格布尔判定（isBoolean && asBoolean），字符串 "true" 不触发。
+        // 已知分歧（M3 Task 0 记录）：真实 Claude 输出恒为布尔，严格判定更安全；tool_result 分支
+        // TS 本就是 `is_error === true` 严格比较，无需对齐。
         JsonNode isError = event.path("is_error");
         if (isError.isBoolean() && isError.asBoolean()) {
             JsonNode result = event.path("result");

@@ -192,6 +192,13 @@ public final class NativeSessions {
 
     // ---- Codex 分支（app-server JSON-RPC，阻塞式；FakeCli 可测）----
 
+    /** 对齐 TS `message.id === 1` 严格判定：仅 JSON 整数参与比较
+     * （Jackson asInt 会把字符串 "1" 强转为 1，宽松判定会让非法应答推进协议）。 */
+    static boolean hasId(JsonNode message, int expected) {
+        JsonNode id = message.path("id");
+        return id.isInt() && id.asInt() == expected;
+    }
+
     static List<CliSessionSummary> listCodexSessions(Options options, long timeoutMs)
             throws IOException, InterruptedException {
         return listCodexSessions(options, timeoutMs, List.of("app-server", "--stdio"));
@@ -251,7 +258,7 @@ public final class NativeSessions {
                     CliProcess.kill(child);
                     break;
                 }
-                if (message.path("id").asInt(0) == 1) {
+                if (hasId(message, 1)) {
                     try {
                         writeJsonLine(stdin, Map.of("method", "initialized", "params", Map.of()));
                         ObjectNode listRequest = MAPPER.createObjectNode();
@@ -271,7 +278,7 @@ public final class NativeSessions {
                     }
                     continue;
                 }
-                if (message.path("id").asInt(0) != 2 || !message.path("result").isObject()) {
+                if (!hasId(message, 2) || !message.path("result").isObject()) {
                     continue;
                 }
                 JsonNode data = message.path("result").path("data");

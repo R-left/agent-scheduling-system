@@ -7,6 +7,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** CliAdapterRegistry 测试：适配器清单与 DEFAULT_CLI 解析（对齐 TS registry.ts）。 */
 class CliAdapterRegistryTest {
@@ -21,6 +22,14 @@ class CliAdapterRegistryTest {
     void listContainsExactlyTwoAdapters() {
         List<CliAdapter> adapters = CliAdapterRegistry.list();
         assertEquals(2, adapters.size());
+    }
+
+    @Test
+    void listKeepsClaudeThenCodexOrder() {
+        List<CliAdapter> adapters = CliAdapterRegistry.list();
+        assertEquals(2, adapters.size());
+        assertTrue(adapters.get(0) instanceof ClaudeAdapter);
+        assertTrue(adapters.get(1) instanceof CodexAdapter);
     }
 
     @Test

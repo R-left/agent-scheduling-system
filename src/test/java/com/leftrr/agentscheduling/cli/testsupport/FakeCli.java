@@ -34,7 +34,9 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
  *   compactNotifications  thread/compact/start 后逐行原样打印的 JSON 文本数组
  *   resumeError           设置后 thread/resume 回 error
  *   record     设置后把收到的每行 JSON 追加写入该文件（协议序列断言用）
- *   stall      设置后 thread/list 不应答（模拟 app-server 挂起，测超时）
+ *   stall      设置后 thread/list 不应答（模拟 app-server 挂起，测超时；
+ *              stringIds 脚本不受此抑制——照常应答后驻留，供主进程宽松/严格判定分流）
+ *   stringIds  设置后所有应答的 id 用字符串（主进程严格判定回归测试用）
  *   exitAfterInit  设置后 initialize 回复完毕即以该值退出（测提前退出）
  */
 public final class FakeCli {
@@ -127,14 +129,15 @@ public final class FakeCli {
             int id = message.path("id").asInt(0);
             switch (method) {
                 case "initialize" -> {
-                    reply(id, MAPPER.createObjectNode());
+                    reply(script, id, MAPPER.createObjectNode());
                     if (script.hasNonNull("exitAfterInit")) {
                         return script.get("exitAfterInit").asInt(0);
                     }
                 }
                 case "thread/list" -> {
-                    if (script.path("stall").asBoolean(false)) {
-                        continue; // 不应答，模拟 app-server 挂起（超时测试用）
+                    if (script.path("stall").asBoolean(false)
+                            && !script.path("stringIds").asBoolean(false)) {
+                        continue; // 不应答，模拟 app-server 挂起（超时测试用；stringIds 脚本需回话）
                     }
                     JsonNode err = script.get("listError");
                     if (err != null) {
@@ -142,7 +145,7 @@ public final class FakeCli {
                         error.set("error", err);
                         System.out.println(MAPPER.writeValueAsString(error));
                     } else {
-                        reply(id, script.get("list"));
+                        reply(script, id, script.get("list"));
                     }
                 }
                 case "thread/resume" -> {
@@ -152,7 +155,7 @@ public final class FakeCli {
                         error.set("error", err);
                         System.out.println(MAPPER.writeValueAsString(error));
                     } else {
-                        reply(id, MAPPER.createObjectNode());
+                        reply(script, id, MAPPER.createObjectNode());
                     }
                 }
                 case "thread/compact/start" -> {
@@ -163,7 +166,7 @@ public final class FakeCli {
                         }
                         System.out.flush();
                     }
-                    reply(id, MAPPER.createObjectNode());
+                    reply(script, id, MAPPER.createObjectNode());
                 }
                 default -> { /* 未知 method 静默忽略，保持行为可预期 */ }
             }
@@ -171,9 +174,13 @@ public final class FakeCli {
         return 0;
     }
 
-    private static void reply(int id, JsonNode result) throws IOException {
+    private static void reply(JsonNode script, int id, JsonNode result) throws IOException {
         ObjectNode reply = MAPPER.createObjectNode();
-        reply.put("id", id);
+        if (script.path("stringIds").asBoolean(false)) {
+            reply.put("id", String.valueOf(id)); // 字符串 id：主进程侧 isInt 严格判定不应匹配
+        } else {
+            reply.put("id", id);
+        }
         reply.set("result", result);
         System.out.println(MAPPER.writeValueAsString(reply));
         System.out.flush();

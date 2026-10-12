@@ -360,6 +360,25 @@ class NativeSessionsTest {
     }
 
     @Test
+    void codexStringIdRepliesAreRejectedUntilTimeout() throws Exception {
+        // 应答 id 全为字符串 "1"/"2"：宽松 asInt(0) 会把 "1" 强转匹配、协议推进并成功返回列表
+        // （修复前 RED）；严格 isInt 判定不匹配，一直等不到 id=2 应答直至超时。
+        // stall 保证 FakeCli 驻留不退出，超时定时器有机会触发而非走「提前退出」路径
+        ObjectNode script = MAPPER.createObjectNode();
+        script.put("stall", true);
+        script.put("stringIds", true);
+        ObjectNode list = script.putObject("list");
+        ObjectNode th1 = list.putArray("data").addObject();
+        th1.put("id", "th1");
+        th1.put("name", "会话甲");
+
+        CliExecutionException e = assertThrows(CliExecutionException.class, () ->
+                NativeSessions.listCodexSessions(codexOptions(), 400,
+                        fakeCliArgs(writeScript(script).toString())));
+        assertEquals("Codex 会话列表读取超时", e.getMessage());
+    }
+
+    @Test
     void codexEarlyExitReportsExitCode() throws Exception {
         ObjectNode script = MAPPER.createObjectNode();
         script.put("exitAfterInit", 2);
