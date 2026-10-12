@@ -12,9 +12,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 对齐 TS 版 src/im/card.ts 的文本工具层（Task 3 测试用例清单 36 条）。
- * 语义口径：markdownSplitIndex/splitLongText 族按 code unit（String.length/substring）；
- * compactAnswerPreview 兜底阈值与 answerNeedsContinuation 按 code point（计划 Review Focus 裁决）。
+ * 对齐 TS 版 src/im/card.ts 的文本工具层（Task 3 测试用例清单 36 条 + R7 修复轮补充 1 条）。
+ * 语义口径（R7）：card.ts 的 .length 恒为 code unit，全部阈值与切片按 String.length()/substring()。
  */
 class CardTextTest {
 
@@ -187,16 +186,29 @@ class CardTextTest {
     }
 
     @Test
-    void compactAnswerPreview_23_fallbackBelowFortyCodePoints() {
+    void compactAnswerPreview_23_fallbackBelowFortyCodeUnits() {
         assertEquals(900, CardText.COMPACT_ANSWER_LENGTH);
         // 39 < 40 → 兜底
         assertEquals("回答包含较多代码与细节，展开后可以查看完整内容。",
                 CardText.compactAnswerPreview("x".repeat(39)));
         // 恰 40 → 原样
         assertEquals("x".repeat(40), CardText.compactAnswerPreview("x".repeat(40)));
-        // code point 语义：😀×20 = 20 code point（40 code unit）< 40 → 兜底
+        // code unit 语义（R7）：😀×20 = 20 code point / 40 code unit → 恰 40 → 原样
+        assertEquals("😀".repeat(20), CardText.compactAnswerPreview("😀".repeat(20)));
+    }
+
+    @Test
+    void answerCodeUnitSemantics_37_astralReverseNail() {
+        // R7 反方向钉子：阈值与切点均按 code unit（card.ts 的 .length 恒为 code unit）
+        // 😀×3000 = 6000 code unit = 恰 6000 → false；😀×3001 = 6002 code unit > 6000 → true
+        assertFalse(CardText.answerNeedsContinuation("😀".repeat(3000)));
+        assertTrue(CardText.answerNeedsContinuation("😀".repeat(3001)));
+        // 😀×19 = 38 code unit < 40 → 兜底
         assertEquals("回答包含较多代码与细节，展开后可以查看完整内容。",
-                CardText.compactAnswerPreview("😀".repeat(20)));
+                CardText.compactAnswerPreview("😀".repeat(19)));
+        // code unit 切片：8004 code unit（😀×4000 + "tail"）→ 切点 6000（即 3000 个 emoji 之后）
+        String answer = "😀".repeat(4000) + "tail";
+        assertEquals("😀".repeat(1000) + "tail", CardText.answerContinuation(answer));
     }
 
     // ---- splitLongText（card.ts:962-973，默认 4000）----
@@ -254,16 +266,16 @@ class CardTextTest {
     // ---- answerNeedsContinuation / answerContinuation（card.ts:954-960）----
 
     @Test
-    void answerNeedsContinuation_30_codePointThreshold() {
+    void answerNeedsContinuation_30_codeUnitThreshold() {
         assertEquals(6000, CardText.MAX_CARD_ANSWER_LENGTH);
         assertFalse(CardText.answerNeedsContinuation("a".repeat(6000)));  // 恰 6000 → false
         assertTrue(CardText.answerNeedsContinuation("a".repeat(6001)));   // > 6000 → true
-        // code point 语义：😀×3001 = 3001 code point（6002 code unit）→ false
-        assertFalse(CardText.answerNeedsContinuation("😀".repeat(3001)));
+        // code unit 语义（R7）：😀×3001 = 3001 code point / 6002 code unit > 6000 → true
+        assertTrue(CardText.answerNeedsContinuation("😀".repeat(3001)));
     }
 
     @Test
-    void answerContinuation_31_splitIndexToCodePointSlice() {
+    void answerContinuation_31_splitIndexSubstringTail() {
         String answer = "a".repeat(6000) + "\n" + "b".repeat(100);
         String continuation = CardText.answerContinuation(answer);
         // markdownSplitIndex(answer, 6000) = 6000（\n 恰在 6000 ≥ 3300）→ 取剩余部分

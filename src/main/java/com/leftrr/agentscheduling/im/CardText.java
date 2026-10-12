@@ -15,13 +15,9 @@ import java.util.regex.Pattern;
 /**
  * 对齐 TS 版 src/im/card.ts 的文本工具层（M4 Task 3）。
  *
- * <p>长度语义双轨（计划 Review Focus 1/6/7/8/9/10）：</p>
- * <ul>
- *   <li>切片族（markdownSplitIndex / splitLongText / answerContinuation 的切点）按
- *       <b>code unit</b>——对齐 TS String.length / slice / substring；</li>
- *   <li>compactAnswerPreview 兜底阈值（40）与 answerNeedsContinuation 阈值（6000）按
- *       <b>code point</b>——计划裁决，借助 {@link FeishuText#codePointLength}。</li>
- * </ul>
+ * <p>长度语义：card.ts 文本工具区的 {@code .length} 恒为 code unit（JS String.length），
+ * 本类全部按 code unit——{@code String.length()} / {@code substring()}（R7 裁决：
+ * 计划 RF7 括号「TS preview.length 是 code point」与裁决 5 首句均为事实笔误，以 card.ts 源码为准）。</p>
  */
 public final class CardText {
     // card.ts:73-76
@@ -55,8 +51,9 @@ public final class CardText {
     private static final Pattern LINE_START_FENCE = Pattern.compile("^```", Pattern.MULTILINE);
 
     /** card.ts:145 {@code /\n(?:---|#{1,6}\s+[^\n]+)\s*$/}（无 MULTILINE，$ 即串尾）。
-     * 差异注释：JS \s 额外匹配 U+FEFF（BOM），Java UNICODE_CHARACTER_CLASS 的 \s 不匹配；
-     * 预览正文不含前导 BOM 场景，忽略。 */
+     * 差异注释：\s 双向差异——Java UNICODE_CHARACTER_CLASS 的 \s 额外匹配 U+0085（NEL）与
+     * U+001C-001F（文件/组分隔符），JS \s 不匹配；JS \s 额外匹配 U+FEFF（BOM），Java 不匹配。
+     * 预览正文不含前导 BOM 与 C0 控制符场景，忽略。 */
     private static final Pattern TAIL_DECORATION =
             Pattern.compile("\\n(?:---|#{1,6}\\s+[^\\n]+)\\s*$", Pattern.UNICODE_CHARACTER_CLASS);
 
@@ -149,22 +146,21 @@ public final class CardText {
         String prose = fenceIndex > 0 ? answer.substring(0, fenceIndex) : answer;
         String preview = JsText.jsTrim(TAIL_DECORATION.matcher(
                 markdownPreview(prose, COMPACT_ANSWER_LENGTH)).replaceAll(""));
-        // 计划裁决：阈值按 code point（TS preview.length 为 code unit，见类注释）
-        return FeishuText.codePointLength(preview) >= 40 ? preview : COMPACT_ANSWER_FALLBACK;
+        // TS preview.length 为 code unit（R7：RF7「code point」为事实笔误）
+        return preview.length() >= 40 ? preview : COMPACT_ANSWER_FALLBACK;
     }
 
     // ---- card.ts:954-960 ----
 
-    /** 计划裁决：阈值按 code point（TS answer.length 为 code unit，见类注释）。 */
+    /** TS answer.length 为 code unit（R7：RF7「code point」为事实笔误）。 */
     public static boolean answerNeedsContinuation(String answer) {
-        return FeishuText.codePointLength(answer) > MAX_CARD_ANSWER_LENGTH;
+        return answer.length() > MAX_CARD_ANSWER_LENGTH;
     }
 
-    /** brief 指定：codePointSlice(answer, markdownSplitIndex(answer, 6000), end)。 */
+    /** TS answer.slice(markdownSplitIndex(answer, MAX_CARD_ANSWER_LENGTH))——code unit 语义（R7）。
+     * markdownSplitIndex 返回值 ≤ String.length()，substring 不会越界（slice 语义天然安全）。 */
     public static String answerContinuation(String answer) {
-        return FeishuText.codePointSlice(answer,
-                markdownSplitIndex(answer, MAX_CARD_ANSWER_LENGTH),
-                FeishuText.codePointLength(answer));
+        return answer.substring(markdownSplitIndex(answer, MAX_CARD_ANSWER_LENGTH));
     }
 
     // ---- card.ts:152-162 ----
