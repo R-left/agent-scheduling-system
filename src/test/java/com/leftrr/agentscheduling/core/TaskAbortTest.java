@@ -9,6 +9,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -76,6 +77,42 @@ class TaskAbortTest {
         assertEquals(1, outcomes.stream().filter(o -> o == AbortTaskOutcome.STOPPED).count());
         assertEquals(threads - 1,
                 outcomes.stream().filter(o -> o == AbortTaskOutcome.ALREADY_STOPPING).count());
+    }
+
+    @Test
+    void concurrentRegisterCancelFiresExactlyOnce() throws Exception {
+        int iterations = 200;
+        var tokens = new CancellationToken[iterations];
+        for (int i = 0; i < iterations; i++) {
+            tokens[i] = new CancellationToken();
+        }
+        var fires = new AtomicInteger();
+        var barrier = new CyclicBarrier(2);
+        var registerer = new Thread(() -> {
+            for (int i = 0; i < iterations; i++) {
+                try {
+                    barrier.await();
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+                tokens[i].onCancel(fires::incrementAndGet);
+            }
+        });
+        var canceller = new Thread(() -> {
+            for (int i = 0; i < iterations; i++) {
+                try {
+                    barrier.await();
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+                tokens[i].cancel();
+            }
+        });
+        registerer.start();
+        canceller.start();
+        registerer.join();
+        canceller.join();
+        assertEquals(iterations, fires.get());
     }
 
     @Test
