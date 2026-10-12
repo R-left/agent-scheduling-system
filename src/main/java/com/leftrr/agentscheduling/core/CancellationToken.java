@@ -13,12 +13,21 @@ public final class CancellationToken {
     private final AtomicBoolean cancelled = new AtomicBoolean();
     private final CopyOnWriteArrayList<ListenerRegistration> listeners = new CopyOnWriteArrayList<>();
 
-    private static final class ListenerRegistration {
+    /**
+     * 一次取消监听器注册的句柄。刻意为普通类且不重写 equals/hashCode：
+     * 移除按同一实例（identity）匹配，避免值相等误删其他注册。
+     */
+    public final class ListenerRegistration {
         final Runnable action;
         final AtomicBoolean fired = new AtomicBoolean();
 
         ListenerRegistration(Runnable action) {
             this.action = action;
+        }
+
+        /** 按同一实例移除注册（取消前移除 = 该监听器不再触发）。 */
+        public void remove() {
+            listeners.remove(this);
         }
     }
 
@@ -35,14 +44,25 @@ public final class CancellationToken {
         return true;
     }
 
-    /** 注册取消监听器；若已取消则立即执行一次。恰好一次由 fired CAS 保证：
+    /** 注册取消监听器并返回注册句柄；若已取消则立即执行一次。恰好一次由 fired CAS 保证：
      * 若注册先于取消快照，快照遍历触发；否则本方法末尾读到 cancelled 后触发。 */
-    public void onCancel(Runnable listener) {
+    public ListenerRegistration register(Runnable listener) {
         ListenerRegistration registration = new ListenerRegistration(listener);
         listeners.add(registration);
         if (cancelled.get()) {
             fireOnce(registration);
         }
+        return registration;
+    }
+
+    /** 兼容 M1 用法的注册入口（返回句柄可忽略）。 */
+    public void onCancel(Runnable listener) {
+        register(listener);
+    }
+
+    /** 按同一实例移除注册（取消前移除 = 该监听器不再触发）。 */
+    public void removeListener(ListenerRegistration registration) {
+        listeners.remove(registration);
     }
 
     private static void fireOnce(ListenerRegistration registration) {
