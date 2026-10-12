@@ -219,6 +219,7 @@ public final class NativeSessions {
         }, timeoutMs, TimeUnit.MILLISECONDS);
         List<CliSessionSummary> result = null;
         String failReason = null;
+        int code;
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(child.getInputStream(), StandardCharsets.UTF_8))) {
             OutputStream stdin = child.getOutputStream();
@@ -299,7 +300,21 @@ public final class NativeSessions {
             if (result == null && failReason == null) {
                 child.waitFor(); // 未定局时等子进程退出（被 kill 或自行结束）
             }
+            code = child.waitFor();
+            stderrPump.join();
+        } catch (InterruptedException e) {
+            // 中断路径：先杀进程树再恢复中断标记，防孤儿；中断语义向调用方透传（同 CliRunner）
+            CliProcess.kill(child);
+            Thread.currentThread().interrupt();
+            throw e;
         } finally {
+            // 所有路径统一收尾（同 CliRunner）：调度器关闭防守护线程泄漏、
+            // 读循环抛 IOException 等异常路径下子进程仍存活时连树杀掉、流关闭
+            timer.cancel(false);
+            scheduler.shutdownNow();
+            if (child.isAlive()) {
+                CliProcess.kill(child);
+            }
             try {
                 child.getOutputStream().close();
             } catch (IOException ignored) {
@@ -311,10 +326,6 @@ public final class NativeSessions {
                 // 同上
             }
         }
-        int code = child.waitFor();
-        stderrPump.join();
-        timer.cancel(false);
-        scheduler.shutdownNow();
         if (result != null) {
             return result;
         }

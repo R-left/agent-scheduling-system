@@ -261,16 +261,22 @@ class NativeSessionsTest {
         th1.put("name", "会话甲");
         th1.put("updatedAt", 1700000000);
         dataArray.addObject().put("id", "th2");
+        // name 缺失回退 preview（brief 用例 9 的 preview 分支）
+        ObjectNode th3 = dataArray.addObject();
+        th3.put("id", "th3");
+        th3.put("preview", "预览文本");
 
         List<CliSessionSummary> sessions = NativeSessions.listCodexSessions(
                 codexOptions(), 10_000, fakeCliArgs(writeScript(script).toString()));
 
-        assertEquals(2, sessions.size());
+        assertEquals(3, sessions.size());
         assertEquals(new CliSessionSummary("th1", "会话甲", "2023-11-14T22:13:20.000Z"), sessions.get(0));
         assertEquals("th2", sessions.get(1).id());
         assertEquals("未命名会话", sessions.get(1).title());
         assertTrue(ISO_MILLIS.matcher(sessions.get(1).updatedAt()).matches(),
                 "updatedAt 缺失时回退当前时间的 ISO 串");
+        assertEquals(new CliSessionSummary("th3", "预览文本", sessions.get(2).updatedAt()), sessions.get(2));
+        assertTrue(ISO_MILLIS.matcher(sessions.get(2).updatedAt()).matches());
     }
 
     @Test
@@ -376,13 +382,14 @@ class NativeSessionsTest {
 
     @Test
     void entryDispatchesCodexBranch() {
-        // 裸 FakeCli（无脚本模式）遇到硬编码 app-server 参数必然报未知模式并以非 0 退出——
-        // 异常来自 codex 分支的退出码路径，证明入口把 CODEX 分发到了 listCodexSessions
+        // 裸 FakeCli（无脚本模式）遇到硬编码 app-server 参数：java 把 "app-server" 当主类加载，
+        // 必然 ClassNotFoundException 并写 stderr、以非 0 退出。断言 stderr 特征（ASCII、
+        // 兜底文案里不存在），使断言真正落在子进程输出而非 stderr 为空时的兜底文案上
         CliExecutionException e = assertThrows(CliExecutionException.class, () ->
                 NativeSessions.listNativeCliSessions(
                         new NativeSessions.Options(new StubAdapter(CliId.CODEX), tmpDir.toString())));
-        assertTrue(e.getMessage().contains("app-server"),
-                "codex 分支异常信息应来自 app-server 参数的 FakeCli 子进程，实际: " + e.getMessage());
+        assertTrue(e.getMessage().contains("ClassNotFoundException"),
+                "codex 分支异常信息应来自子进程 stderr 的 ClassNotFoundException，实际: " + e.getMessage());
     }
 
     // ---------- 工具 ----------
