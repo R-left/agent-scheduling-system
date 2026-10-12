@@ -26,6 +26,9 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
  *   emit-hang:<file>:<ms>  先输出文件内容，再休眠 ms 后退出 0
  *   stderr:<text>[:<code>] 输出 stderr 后以 code（默认 1）退出
  *   echo-stdin             读入全部 stdin，作为一行 JSON 输出 {"stdin":"..."} 后退出 0
+ *   stdin-record:<record>:<fixture>
+ *                          读入全部 stdin 原样写入 record 文件后逐行输出 fixture 内容
+ *                          （两路径均相对 cwd 解析，NativeCompact stdin 断言用；Task 8 授权新增）
  *   cwd                    输出一行 {"cwd":"<user.dir>"} 后退出 0
  *   app-server:<file>      模拟 codex app-server JSON-RPC（脚本 JSON：见下）
  * app-server 脚本字段：
@@ -81,6 +84,13 @@ public final class FakeCli {
             ObjectNode out = MAPPER.createObjectNode();
             out.put("stdin", all);
             System.out.println(MAPPER.writeValueAsString(out));
+            return 0;
+        }
+        if (arg.startsWith("stdin-record:")) {
+            String[] parts = arg.split(":", 3);
+            String all = new String(System.in.readAllBytes(), StandardCharsets.UTF_8);
+            Files.writeString(Path.of(parts[1]), all, StandardCharsets.UTF_8);
+            emit(Path.of(parts[2]));
             return 0;
         }
         if (arg.equals("cwd")) {
