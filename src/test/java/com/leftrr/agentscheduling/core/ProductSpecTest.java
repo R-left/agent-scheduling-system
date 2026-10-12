@@ -332,6 +332,10 @@ class ProductSpecTest {
         assertTrue(ProductSpec.isProductSpecOwner("ou-a", "", "ou-a", "un-1"));
         // openId 不等 → false
         assertFalse(ProductSpec.isProductSpecOwner("ou-a", null, "ou-b", null));
+        // 对齐 TS `===`：双方 openId 均 null → true；一方 null → false
+        assertTrue(ProductSpec.isProductSpecOwner(null, null, null, null));
+        assertFalse(ProductSpec.isProductSpecOwner(null, null, "ou-a", null));
+        assertFalse(ProductSpec.isProductSpecOwner("ou-a", null, null, null));
     }
 
     // 15. findPendingByDocument：botId + pending + lark-doc + documentToken 四条件齐 → 命中；任一不符 → null

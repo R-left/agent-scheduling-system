@@ -263,7 +263,9 @@ public final class ProductSpec {
                 && operatorUnionId != null && !operatorUnionId.isEmpty()) {
             return ownerUnionId.equals(operatorUnionId);
         }
-        return ownerOpenId != null && ownerOpenId.equals(operatorOpenId);
+        // 对齐 TS `===`：null === null 亦为 true，不能用 != null && equals 短路
+        return ownerOpenId == null ? operatorOpenId == null
+                : ownerOpenId.equals(operatorOpenId);
     }
 
     private static String trimmedText(JsonNode node) {

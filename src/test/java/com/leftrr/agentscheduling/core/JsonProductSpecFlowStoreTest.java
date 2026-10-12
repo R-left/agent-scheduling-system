@@ -102,6 +102,18 @@ class JsonProductSpecFlowStoreTest {
         assertThrows(IOException.class, () -> new JsonProductSpecFlowStore(file));
     }
 
+    // ---- 用例 2c：空文件 → IOException（对齐 TS JSON.parse SyntaxError 直通，非「格式错误」路径）----
+
+    @Test
+    void constructorRejectsEmptyFileAsParseFailureNotFormatError() throws IOException {
+        String file = path("spec-flows.json");
+        writeRaw(file, "");
+        IOException error = assertThrows(IOException.class,
+                () -> new JsonProductSpecFlowStore(file));
+        assertFalse(error.getMessage().contains("格式错误"),
+                "空文件应走解析失败路径而非「格式错误」: " + error.getMessage());
+    }
+
     // ---- 用例 3：非法行跳过（对齐 flatMap + safeParse），合法行保留 ----
 
     @Test

@@ -70,6 +70,11 @@ public final class JsonProductSpecFlowStore extends ProductSpec.ProductSpecFlowS
             return List.of();
         }
         JsonNode rows = MAPPER.readTree(content);
+        if (rows == null || rows.isMissingNode()) {
+            // 对齐 TS：空文件 JSON.parse 抛 SyntaxError 直通（与非法 JSON 同为解析失败路径），
+            // 不走「产品方案状态文件格式错误」
+            throw new IOException("产品方案状态文件解析失败: " + filePath);
+        }
         if (!rows.isArray()) {
             throw new IOException("产品方案状态文件格式错误: " + filePath);
         }
