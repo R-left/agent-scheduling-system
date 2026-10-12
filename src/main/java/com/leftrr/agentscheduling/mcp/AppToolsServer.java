@@ -16,6 +16,7 @@ import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
 import io.modelcontextprotocol.spec.McpSchema.Tool;
 import io.modelcontextprotocol.spec.McpServerTransportProvider;
+import io.modelcontextprotocol.server.transport.StdioServerTransportProvider;
 
 import java.util.List;
 import java.util.Map;
@@ -32,9 +33,11 @@ import java.util.function.BiFunction;
  * <p>capabilities 走 SDK 默认：tools 能力随工具注册自动声明，不显式定制（Review Focus 5）；
  * 不注册任何 TS 没有的工具。</p>
  *
- * <p>装配形态：Task 2 的 {@code AgentOsMcpServer.main} 以 stdio transport 挂载本类产物——
- * {@code new AppToolsServer(mapper).connect(provider)}；测试用内存流 transport 走同一入口。
- * 注意 AppTools.DEFAULT_SERVER_MAIN_CLASS 指向本类，stdio main 入口由 Task 2 落地。</p>
+ * <p>stdio 装配形态（R-M5-2）：main 入口在本类——对齐 M2 预钉的
+ * {@code AppTools.DEFAULT_SERVER_MAIN_CLASS = com.leftrr.agentscheduling.mcp.AppToolsServer}
+ * 与 TS「app-tools-server.ts 自身即入口」的单文件形态。本类由 cli 适配层以子进程方式启动
+ * （AppTools.serverInvocation / AppTools.serverMainClass），stdin/stdout 为 JSON-RPC 通道；
+ * 日志走 stderr——stdout 污染会破坏协议。测试用内存流 transport 走同一 {@link #connect} 入口。</p>
  */
 public final class AppToolsServer {
 
@@ -113,9 +116,23 @@ public final class AppToolsServer {
         return build(McpJsonDefaults.getMapper());
     }
 
-    /** 可注入 McpJsonMapper 的装配（测试 / Task 2 stdio 入口共用）。 */
+    /** 可注入 McpJsonMapper 的装配（测试 / stdio 入口共用）。 */
     public static AppToolsServer build(McpJsonMapper mapper) {
         return new AppToolsServer(mapper);
+    }
+
+    /**
+     * stdio 入口：由 cli 适配层以子进程方式启动（AppTools.serverMainClass 指向本类），
+     * stdin/stdout 即 JSON-RPC 通道（StdioServerTransportProvider 单参构造接 System.in/out，
+     * SDK 字节码实测）；日志走 stderr——stdout 污染会破坏协议。
+     *
+     * <p>接线形态：main 只做 {@code build() + connect(new StdioServerTransportProvider(mapper))}
+     * ——build() 已含三工具装配与 McpServer.sync 链（connect 内），此处不重复装配、不双建 sync 链。
+     * 进程保活由 SDK 的 stdio 读循环线程承载（stdio-inbound 为 Executors.newSingleThreadExecutor
+     * 创建的非 daemon 线程，设计裁决 7 实测核实）：EOF 或 server.close() 才退出，main 无需自旋。</p>
+     */
+    public static void main(String[] args) {
+        build().connect(new StdioServerTransportProvider(McpJsonDefaults.getMapper()));
     }
 
     /** 三工具注册清单（顺序：澄清 → 产品 → 协作，对齐 TS registerTool 顺序）。 */
