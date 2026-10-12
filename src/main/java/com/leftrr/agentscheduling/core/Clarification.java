@@ -114,6 +114,27 @@ public final class Clarification {
         public List<ClarificationAnswer> answers() { return List.copyOf(answers); }
     }
 
+    /**
+     * 仅供测试构造任意状态的 flow（M4 增量修改）：绕过 store 与请求校验，
+     * 以给定 (token, request, currentIndex, answers) 组合直接组装 ClarificationFlow，
+     * 供 im 包等跨包测试夹具使用。生产代码不得调用。
+     *
+     * <p>task/bot/session/owner 等身份字段填入固定占位值（卡片构造不消费它们）；
+     * answers 为 null 表示空答案列表。</p>
+     */
+    public static ClarificationFlow flowsForTest(String token, ClarificationRequest request,
+            int currentIndex, List<ClarificationAnswer> answers) {
+        CreateFlowOptions options = new CreateFlowOptions(
+                "test-task", "test-bot", "test-session", "ou_test", null, null,
+                null, null, true, request);
+        ClarificationFlow flow = new ClarificationFlow(token, options);
+        flow.currentIndex = currentIndex;
+        if (answers != null) {
+            flow.answers.addAll(answers);
+        }
+        return flow;
+    }
+
     /** 对齐 ClarificationRequestSchema.safeParse（含 zod default 与 superRefine 判定）。 */
     public static ClarificationRequest parseRequest(JsonNode input) {
         if (input == null || !input.isObject()) {
