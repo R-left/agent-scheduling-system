@@ -33,6 +33,9 @@ public final class ProductSpecCards {
         if (request instanceof ProductSpec.ProductSpecRequest.Lark lark) {
             return "☁️ **飞书云文档** · [打开文档](" + lark.documentUrl() + ")";
         }
+        // T7①：sealed 接口 ProductSpecRequest 仅 permits Local/Lark 两实现，
+        // 上面 instanceof Lark 未命中即必为 Local；若未来新增第三实现，
+        // 此强转会抛 ClassCastException——此处依赖 Lark/Local 二分完备。
         ProductSpec.ProductSpecRequest.Local local = (ProductSpec.ProductSpecRequest.Local) request;
         return "📘 **Spec** · `" + CardText.escapeFeishuMarkdown(local.specPath()) + "`\n"
                 + "🎫 **Tickets** · `" + CardText.escapeFeishuMarkdown(local.ticketsPath()) + "`";

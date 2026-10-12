@@ -85,4 +85,15 @@ class CardActionsTest {
         assertTrue(action.value().isObject() && action.value().isEmpty());
         assertTrue(action.formValue().isObject() && action.formValue().isEmpty());
     }
+
+    @Test
+    void case06_nullDataYieldsSameAsEmptyData() {
+        // T2①：TS data?.x 可选链对 null data 吞成 undefined → 与 {} 同果
+        CardAction action = CardActions.parseCardAction(null);
+        assertEquals("", action.operatorOpenId());
+        assertEquals("", action.operatorUnionId());
+        assertEquals("", action.messageId());
+        assertTrue(action.value().isObject() && action.value().isEmpty());
+        assertTrue(action.formValue().isObject() && action.formValue().isEmpty());
+    }
 }

@@ -12,7 +12,6 @@ import com.leftrr.agentscheduling.im.SessionCards.TeamCardOptions;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
-import java.util.TimeZone;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -23,8 +22,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 用例编号 1-15 与 brief 一一对应）。
  *
  * <p>黄金 JSON 断言以序列化字符串全等比较（Jackson ObjectNode 保持插入序）。
- * buildResumeCard 内部按 TS Intl 默认行为取系统时区，涉及会话行的用例
- * 在 UTC 默认时区下运行（try/finally 还原），保证黄金串逐字可断言。</p>
+ * 涉及会话行的用例走时区注入重载 buildResumeCard(options, UTC)（T6②，不切全局默认时区），
+ * 保证黄金串逐字可断言。</p>
  */
 class SessionCardsTest {
 
@@ -74,17 +73,6 @@ class SessionCardsTest {
                         List.of(), false, true)));
     }
 
-    /** 在 UTC 系统默认时区下执行（对齐 TS Intl 无 timeZone 参数在测试机的确定性）。 */
-    private static void withUtcDefault(Runnable action) {
-        TimeZone original = TimeZone.getDefault();
-        TimeZone.setDefault(TimeZone.getTimeZone("UTC"));
-        try {
-            action.run();
-        } finally {
-            TimeZone.setDefault(original);
-        }
-    }
-
     private static JsonNode elements(ObjectNode card) {
         return card.path("body").path("elements");
     }
@@ -128,128 +116,122 @@ class SessionCardsTest {
 
     @Test
     void case05_resumeCardEmptySessions() {
-        withUtcDefault(() -> {
-            ObjectNode card = SessionCards.buildResumeCard(resumeOptions(null, List.of()));
-            JsonNode all = elements(card);
-            assertEquals(2, all.size());
-            assertEquals("选择后，当前话题会继续使用对应的 CLI 上下文。", content(all.get(0)));
-            assertEquals("当前工作目录里还没有可以恢复的 CLI 会话。先完成一次任务，再用 `/new` 开启新会话。",
-                    content(all.get(1)));
-            assertFalse(jsonOf(card).contains("column_set"));
-            assertFalse(jsonOf(card).contains("hr"));
-        });
+        ObjectNode card = SessionCards.buildResumeCard(
+                resumeOptions(null, List.of()), java.time.ZoneOffset.UTC);
+        JsonNode all = elements(card);
+        assertEquals(2, all.size());
+        assertEquals("选择后，当前话题会继续使用对应的 CLI 上下文。", content(all.get(0)));
+        assertEquals("当前工作目录里还没有可以恢复的 CLI 会话。先完成一次任务，再用 `/new` 开启新会话。",
+                content(all.get(1)));
+        assertFalse(jsonOf(card).contains("column_set"));
+        assertFalse(jsonOf(card).contains("hr"));
     }
 
     @Test
     void case06_resumeCardGoldenTwoSessionsFirstCurrent() {
-        withUtcDefault(() -> {
-            ObjectNode card = SessionCards.buildResumeCard(
-                    resumeOptions(SESSION_A_ID, List.of(sessionA(), sessionB())));
-            String currentSession = "{\"tag\":\"markdown\",\"content\":\"**当前会话**\"}";
-            String rowA = "{\"tag\":\"column_set\",\"flex_mode\":\"none\",\"horizontal_spacing\":\"12px\","
-                    + "\"columns\":["
-                    + "{\"tag\":\"column\",\"width\":\"weighted\",\"weight\":4,\"elements\":["
-                    + "{\"tag\":\"markdown\",\"content\":\"**修复登录页**\\n_10/13 06:30 · abcdef12_\"}]},"
-                    + "{\"tag\":\"column\",\"width\":\"auto\",\"vertical_align\":\"center\","
-                    + "\"elements\":[" + currentSession + "]}]}";
-            String rowB = "{\"tag\":\"column_set\",\"flex_mode\":\"none\",\"horizontal_spacing\":\"12px\","
-                    + "\"columns\":["
-                    + "{\"tag\":\"column\",\"width\":\"weighted\",\"weight\":4,\"elements\":["
-                    + "{\"tag\":\"markdown\",\"content\":\"**重构配置加载**\\n_10/12 22:10 · 12345678_\"}]},"
-                    + "{\"tag\":\"column\",\"width\":\"auto\",\"vertical_align\":\"center\",\"elements\":["
-                    + "{\"tag\":\"button\",\"text\":{\"tag\":\"plain_text\",\"content\":\"恢复\"},"
-                    + "\"type\":\"primary_filled\",\"size\":\"medium\",\"behaviors\":["
-                    + "{\"type\":\"callback\",\"value\":{\"action\":\"resume_cli_session\","
-                    + "\"agentSessionId\":\"" + AGENT_SESSION_ID + "\","
-                    + "\"cliSessionId\":\"" + SESSION_B_ID + "\"}}]}]}]}";
-            String golden = "{\"schema\":\"2.0\","
-                    + "\"config\":{\"update_multi\":true,\"summary\":{\"content\":\"Claude Code：选择历史会话\"}},"
-                    + "\"header\":{\"template\":\"blue\",\"title\":{\"tag\":\"plain_text\","
-                    + "\"content\":\"恢复历史会话\"},"
-                    + "\"subtitle\":{\"tag\":\"plain_text\",\"content\":\"Claude Code\"}},"
-                    + "\"body\":{\"direction\":\"vertical\",\"vertical_spacing\":\"12px\",\"elements\":["
-                    + "{\"tag\":\"markdown\",\"content\":\"选择后，当前话题会继续使用对应的 CLI 上下文。\"},"
-                    + rowA + ",{\"tag\":\"hr\"}," + rowB
-                    + "]}}";
-            assertEquals(golden, jsonOf(card));
-        });
+        ObjectNode card = SessionCards.buildResumeCard(
+                resumeOptions(SESSION_A_ID, List.of(sessionA(), sessionB())),
+                java.time.ZoneOffset.UTC);
+        String currentSession = "{\"tag\":\"markdown\",\"content\":\"**当前会话**\"}";
+        String rowA = "{\"tag\":\"column_set\",\"flex_mode\":\"none\",\"horizontal_spacing\":\"12px\","
+                + "\"columns\":["
+                + "{\"tag\":\"column\",\"width\":\"weighted\",\"weight\":4,\"elements\":["
+                + "{\"tag\":\"markdown\",\"content\":\"**修复登录页**\\n_10/13 06:30 · abcdef12_\"}]},"
+                + "{\"tag\":\"column\",\"width\":\"auto\",\"vertical_align\":\"center\","
+                + "\"elements\":[" + currentSession + "]}]}";
+        String rowB = "{\"tag\":\"column_set\",\"flex_mode\":\"none\",\"horizontal_spacing\":\"12px\","
+                + "\"columns\":["
+                + "{\"tag\":\"column\",\"width\":\"weighted\",\"weight\":4,\"elements\":["
+                + "{\"tag\":\"markdown\",\"content\":\"**重构配置加载**\\n_10/12 22:10 · 12345678_\"}]},"
+                + "{\"tag\":\"column\",\"width\":\"auto\",\"vertical_align\":\"center\",\"elements\":["
+                + "{\"tag\":\"button\",\"text\":{\"tag\":\"plain_text\",\"content\":\"恢复\"},"
+                + "\"type\":\"primary_filled\",\"size\":\"medium\",\"behaviors\":["
+                + "{\"type\":\"callback\",\"value\":{\"action\":\"resume_cli_session\","
+                + "\"agentSessionId\":\"" + AGENT_SESSION_ID + "\","
+                + "\"cliSessionId\":\"" + SESSION_B_ID + "\"}}]}]}]}";
+        String golden = "{\"schema\":\"2.0\","
+                + "\"config\":{\"update_multi\":true,\"summary\":{\"content\":\"Claude Code：选择历史会话\"}},"
+                + "\"header\":{\"template\":\"blue\",\"title\":{\"tag\":\"plain_text\","
+                + "\"content\":\"恢复历史会话\"},"
+                + "\"subtitle\":{\"tag\":\"plain_text\",\"content\":\"Claude Code\"}},"
+                + "\"body\":{\"direction\":\"vertical\",\"vertical_spacing\":\"12px\",\"elements\":["
+                + "{\"tag\":\"markdown\",\"content\":\"选择后，当前话题会继续使用对应的 CLI 上下文。\"},"
+                + rowA + ",{\"tag\":\"hr\"}," + rowB
+                + "]}}";
+        assertEquals(golden, jsonOf(card));
     }
 
     @Test
     void case07_resumeCardSessionRowContentEscaped() {
-        withUtcDefault(() -> {
-            CliSessionSummary session = new CliSessionSummary(
-                    SESSION_A_ID, "<b>修复登录</b>", "2026-10-13T06:30:00.000Z");
-            ObjectNode card = SessionCards.buildResumeCard(
-                    resumeOptions(null, List.of(session)));
-            JsonNode row = elements(card).get(1);
-            JsonNode titleColumn = row.path("columns").get(0);
-            assertEquals(4, titleColumn.path("weight").asInt());
-            assertEquals("**<&zwj;b>修复登录<&zwj;/b>**\n_10/13 06:30 · abcdef12_",
-                    content(titleColumn.path("elements").get(0)));
-        });
+        CliSessionSummary session = new CliSessionSummary(
+                SESSION_A_ID, "<b>修复登录</b>", "2026-10-13T06:30:00.000Z");
+        ObjectNode card = SessionCards.buildResumeCard(
+                resumeOptions(null, List.of(session)), java.time.ZoneOffset.UTC);
+        JsonNode row = elements(card).get(1);
+        JsonNode titleColumn = row.path("columns").get(0);
+        assertEquals(4, titleColumn.path("weight").asInt());
+        assertEquals("**<&zwj;b>修复登录<&zwj;/b>**\n_10/13 06:30 · abcdef12_",
+                content(titleColumn.path("elements").get(0)));
     }
 
     @Test
     void case08_resumeCardCurrentMarkdownVsResumeButton() {
-        withUtcDefault(() -> {
-            // current 命中 → 第二列为「当前会话」markdown
-            ObjectNode card = SessionCards.buildResumeCard(
-                    resumeOptions(SESSION_A_ID, List.of(sessionA(), sessionB())));
-            JsonNode columnA = elements(card).get(1).path("columns").get(1);
-            assertEquals("auto", columnA.path("width").asText());
-            assertEquals("center", columnA.path("vertical_align").asText());
-            assertEquals("{\"tag\":\"markdown\",\"content\":\"**当前会话**\"}",
-                    jsonOf((ObjectNode) columnA.path("elements").get(0)));
+        // current 命中 → 第二列为「当前会话」markdown
+        ObjectNode card = SessionCards.buildResumeCard(
+                resumeOptions(SESSION_A_ID, List.of(sessionA(), sessionB())),
+                java.time.ZoneOffset.UTC);
+        JsonNode columnA = elements(card).get(1).path("columns").get(1);
+        assertEquals("auto", columnA.path("width").asText());
+        assertEquals("center", columnA.path("vertical_align").asText());
+        assertEquals("{\"tag\":\"markdown\",\"content\":\"**当前会话**\"}",
+                jsonOf((ObjectNode) columnA.path("elements").get(0)));
 
-            // 非 current → 恢复按钮（primary_filled / medium / resume_cli_session value）
-            JsonNode buttonB = elements(card).get(3).path("columns").get(1)
-                    .path("elements").get(0);
-            assertEquals("button", buttonB.path("tag").asText());
-            assertEquals("恢复", buttonB.path("text").path("content").asText());
-            assertEquals("primary_filled", buttonB.path("type").asText());
-            assertEquals("medium", buttonB.path("size").asText());
-            JsonNode value = buttonB.path("behaviors").get(0).path("value");
-            assertEquals("resume_cli_session", value.path("action").asText());
-            assertEquals(AGENT_SESSION_ID, value.path("agentSessionId").asText());
-            assertEquals(SESSION_B_ID, value.path("cliSessionId").asText());
-        });
+        // 非 current → 恢复按钮（primary_filled / medium / resume_cli_session value）
+        JsonNode buttonB = elements(card).get(3).path("columns").get(1)
+                .path("elements").get(0);
+        assertEquals("button", buttonB.path("tag").asText());
+        assertEquals("恢复", buttonB.path("text").path("content").asText());
+        assertEquals("primary_filled", buttonB.path("type").asText());
+        assertEquals("medium", buttonB.path("size").asText());
+        JsonNode value = buttonB.path("behaviors").get(0).path("value");
+        assertEquals("resume_cli_session", value.path("action").asText());
+        assertEquals(AGENT_SESSION_ID, value.path("agentSessionId").asText());
+        assertEquals(SESSION_B_ID, value.path("cliSessionId").asText());
     }
 
     @Test
     void case09_resumeCardHrOnlyBetweenRows() {
-        withUtcDefault(() -> {
-            ObjectNode card = SessionCards.buildResumeCard(
-                    resumeOptions(SESSION_A_ID, List.of(sessionA(), sessionB())));
-            JsonNode all = elements(card);
-            // 首行说明 + 2 行 + 行间 1 个 hr = 4 个元素；末行后无 hr
-            assertEquals(4, all.size());
-            assertEquals("column_set", all.get(1).path("tag").asText());
-            assertEquals("hr", all.get(2).path("tag").asText());
-            assertEquals("column_set", all.get(3).path("tag").asText());
-        });
+        ObjectNode card = SessionCards.buildResumeCard(
+                resumeOptions(SESSION_A_ID, List.of(sessionA(), sessionB())),
+                java.time.ZoneOffset.UTC);
+        JsonNode all = elements(card);
+        // 首行说明 + 2 行 + 行间 1 个 hr = 4 个元素；末行后无 hr
+        assertEquals(4, all.size());
+        assertEquals("column_set", all.get(1).path("tag").asText());
+        assertEquals("hr", all.get(2).path("tag").asText());
+        assertEquals("column_set", all.get(3).path("tag").asText());
     }
 
     @Test
     void case10_resumeCardNoCurrentMatchAllButtons() {
-        withUtcDefault(() -> {
-            // currentCliSessionId 为 null → 全部为「恢复」按钮
-            ObjectNode noneCard = SessionCards.buildResumeCard(
-                    resumeOptions(null, List.of(sessionA(), sessionB())));
-            assertEquals("button", elements(noneCard).get(1).path("columns").get(1)
-                    .path("elements").get(0).path("tag").asText());
-            assertEquals("button", elements(noneCard).get(3).path("columns").get(1)
-                    .path("elements").get(0).path("tag").asText());
+        // currentCliSessionId 为 null → 全部为「恢复」按钮
+        ObjectNode noneCard = SessionCards.buildResumeCard(
+                resumeOptions(null, List.of(sessionA(), sessionB())),
+                java.time.ZoneOffset.UTC);
+        assertEquals("button", elements(noneCard).get(1).path("columns").get(1)
+                .path("elements").get(0).path("tag").asText());
+        assertEquals("button", elements(noneCard).get(3).path("columns").get(1)
+                .path("elements").get(0).path("tag").asText());
 
-            // currentCliSessionId 无命中 → 同样全部为按钮
-            ObjectNode missCard = SessionCards.buildResumeCard(
-                    resumeOptions("ffffffffffffffffffffffffffffffff",
-                            List.of(sessionA(), sessionB())));
-            assertEquals("button", elements(missCard).get(1).path("columns").get(1)
-                    .path("elements").get(0).path("tag").asText());
-            assertEquals("button", elements(missCard).get(3).path("columns").get(1)
-                    .path("elements").get(0).path("tag").asText());
-        });
+        // currentCliSessionId 无命中 → 同样全部为按钮
+        ObjectNode missCard = SessionCards.buildResumeCard(
+                resumeOptions("ffffffffffffffffffffffffffffffff",
+                        List.of(sessionA(), sessionB())),
+                java.time.ZoneOffset.UTC);
+        assertEquals("button", elements(missCard).get(1).path("columns").get(1)
+                .path("elements").get(0).path("tag").asText());
+        assertEquals("button", elements(missCard).get(3).path("columns").get(1)
+                .path("elements").get(0).path("tag").asText());
     }
 
     // ---- buildSessionNoticeCard（card.ts:668-684）----

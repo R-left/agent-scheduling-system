@@ -154,4 +154,14 @@ class LarkPostsTest {
         // 11 位非法（对照，见用例 11）
         assertEquals("bin", LarkPosts.resourceExtension("file", "x.abcdefghijk", ""));
     }
+
+    @Test
+    void case18_dotfileNameHasNoExtensionFallsBackToMime() {
+        // R6：Node path.extname 对点开头文件名（dot == 0）返回 ''，视同无扩展名，
+        // 与 TS 一致走 contentType 映射 / type 兜底
+        assertEquals("jpg", LarkPosts.resourceExtension("file", ".hidden", "image/jpeg"));
+        assertEquals("png", LarkPosts.resourceExtension("file", ".pdf", "image/png"));
+        assertEquals("img", LarkPosts.resourceExtension("image", ".hidden", "image/svg+xml"));
+        assertEquals("bin", LarkPosts.resourceExtension("file", ".pdf", "application/octet-stream"));
+    }
 }

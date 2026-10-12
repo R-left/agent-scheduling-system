@@ -9,7 +9,6 @@ import com.leftrr.agentscheduling.core.TaskProgressSnapshot;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.regex.Pattern;
 
 /**
@@ -24,24 +23,6 @@ public final class TaskCards {
 
     /** card.ts:263 usageMeta 剥前缀 {@code /^当前上下文(?:约)?\s+/}。 */
     private static final Pattern CONTEXT_PREFIX = Pattern.compile("^当前上下文(?:约)?\\s+");
-
-    /**
-     * card.ts:78-90 TOOL_ICONS。差异注释：CardText 内的同名表为私有，Task 4 约束
-     * 不改既有文件，故在此复制；两处须同步维护（仅 buildRunningElements 的
-     * currentToolName 图标与本表相关，activityLine 走 CardText 自带副本）。
-     */
-    private static final Map<String, String> TOOL_ICONS = Map.ofEntries(
-            Map.entry("Agent", "🧩"),
-            Map.entry("Bash", "⌘"),
-            Map.entry("Edit", "✏️"),
-            Map.entry("Glob", "📁"),
-            Map.entry("Grep", "🔎"),
-            Map.entry("Read", "📄"),
-            Map.entry("Task", "🧩"),
-            Map.entry("TaskOutput", "⏳"),
-            Map.entry("WebFetch", "🌐"),
-            Map.entry("WebSearch", "🔍"),
-            Map.entry("Write", "📝"));
 
     private static final JsonNodeFactory FACTORY = JsonNodeFactory.instance;
 
@@ -104,11 +85,10 @@ public final class TaskCards {
         header.put("template", style.template());
         header.set("title", headerTitle);
         ArrayNode elements = FACTORY.arrayNode();
-        for (ObjectNode element : options.status() == TaskStatus.RUNNING
+        // T4②：逐 add 改为 addAll（纯惯用法，语义不变）
+        elements.addAll(options.status() == TaskStatus.RUNNING
                 ? buildRunningElements(options)
-                : buildFinishedElements(options)) {
-            elements.add(element);
-        }
+                : buildFinishedElements(options));
         ObjectNode body = FACTORY.objectNode();
         body.put("direction", "vertical");
         body.put("vertical_spacing", "12px");
@@ -331,6 +311,6 @@ public final class TaskCards {
     }
 
     private static String toolIcon(String toolName) {
-        return TOOL_ICONS.getOrDefault(toolName, "⚙️");
+        return CardText.TOOL_ICONS.getOrDefault(toolName, "⚙️"); // T4①：消费 CardText 公开表
     }
 }

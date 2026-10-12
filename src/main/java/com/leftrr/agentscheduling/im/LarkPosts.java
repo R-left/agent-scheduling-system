@@ -9,6 +9,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * 飞书 post 消息构造与资源扩展名推断。
@@ -70,20 +71,26 @@ public final class LarkPosts {
         return root;
     }
 
+    /** /^[a-z0-9]{1,10}$/（扩展名合法判定，预编译避免 String.matches 每次重编译，T2③）。 */
+    private static final Pattern EXTENSION_PATTERN = Pattern.compile("^[a-z0-9]{1,10}$");
+
     /**
      * 由文件名/Content-Type 推断资源扩展名。对齐 lark.ts:178-188。
      * TS extname(fileName).slice(1).toLowerCase() → 取最后一个 '.' 后的子串再
-     * lowercase（无 '.' → 空串，brief Step 2）；命中 /^[a-z0-9]{1,10}$/ 原样返回，
-     * 否则取 contentType ';' 前段 trim + lowercase 查映射表，未知 mime 按 image→img、
-     * file→bin 兜底。
+     * lowercase（无 '.' → 空串，brief Step 2）；Node path.extname 对点开头文件名
+     * （dot == 0，如 ".hidden"/".pdf"）返回 ''，同样视作无扩展名（R6）；
+     * 命中 /^[a-z0-9]{1,10}$/ 原样返回，否则取 contentType ';' 前段 trim + lowercase
+     * 查映射表，未知 mime 按 image→img、file→bin 兜底。
      */
     public static String resourceExtension(String type, String fileName, String contentType) {
         String original = "";
         if (fileName != null && !fileName.isEmpty()) {
             int dot = fileName.lastIndexOf('.');
-            original = dot < 0 ? "" : fileName.substring(dot + 1).toLowerCase(Locale.ROOT);
+            // R6：TS path.extname 对 dot == 0 的点开头文件名返回 ''，视同无扩展名
+            original = (dot < 0 || dot == 0)
+                    ? "" : fileName.substring(dot + 1).toLowerCase(Locale.ROOT);
         }
-        if (original.matches("^[a-z0-9]{1,10}$")) {
+        if (EXTENSION_PATTERN.matcher(original).matches()) {
             return original;
         }
         String mime = contentType.split(";", 2)[0].trim().toLowerCase(Locale.ROOT);

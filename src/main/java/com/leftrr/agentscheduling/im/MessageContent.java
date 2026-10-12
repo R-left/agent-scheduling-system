@@ -1,8 +1,6 @@
 package com.leftrr.agentscheduling.im;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.leftrr.agentscheduling.cli.JsText;
 
 import java.util.ArrayList;
@@ -15,22 +13,15 @@ import java.util.List;
  */
 public final class MessageContent {
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
-
     private MessageContent() {
     }
 
     /**
      * 对齐 lark.ts:205-222。TS JSON.parse（SyntaxError 冒泡）→
-     * unchecked IllegalArgumentException（设计裁决 10）。
+     * unchecked IllegalArgumentException（设计裁决 10，包装复用 MessageParser.parseContent）。
      */
     public static String extractMessageText(String messageType, String content) {
-        JsonNode parsed;
-        try {
-            parsed = MAPPER.readTree(content);
-        } catch (JsonProcessingException e) {
-            throw new IllegalArgumentException("消息 content 非法 JSON: " + e.getMessage(), e);
-        }
+        JsonNode parsed = MessageParser.parseContent(content);
 
         if ("text".equals(messageType)) {
             return parsed.path("text").asText(""); // TS parsed.text ?? ''

@@ -91,9 +91,9 @@ class ClarificationCardsTest {
                 + "\"flowToken\":\"" + TOKEN + "\",\"questionId\":\"q1\",\"decisionMode\":\"" + mode + "\"}}]}";
     }
 
-    /** form 黄金串（name = clarify_ + token 前 8 位）。 */
+    /** form 黄金串（name = clarify_ + TOKEN 前 8 位，直接用 TOKEN8，勿再 substring 复算）。 */
     private static String formGolden(String token, String questionId) {
-        return "{\"tag\":\"form\",\"name\":\"clarify_" + token.substring(0, Math.min(8, token.length()))
+        return "{\"tag\":\"form\",\"name\":\"clarify_" + TOKEN8
                 + "\",\"vertical_spacing\":\"8px\",\"elements\":["
                 + "{\"tag\":\"input\",\"name\":\"custom_answer\",\"placeholder\":"
                 + "{\"tag\":\"plain_text\",\"content\":\"都不合适？在这里写下你的答案\"},\"max_length\":500},"

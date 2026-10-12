@@ -10,6 +10,7 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * 对齐 TS 版 src/im/card.ts 的三张会话卡：buildResumeCard（card.ts:598-666）、
@@ -24,10 +25,11 @@ public final class SessionCards {
 
     /**
      * card.ts:589-595 Intl zh-CN month/day numeric + hour/minute 2-digit + hour12:false 的形态
-     * （"10/13 06:30"；M/d 单数不补零、HH:mm 恒两位）。
+     * （"10/13 06:30"；M/d 单数不补零、HH:mm 恒两位）。Locale 显式钉 CHINA，
+     * 对齐 TS Intl 显式 'zh-CN'，避免宿主默认 Locale 漂移（T6①）。
      */
     static final DateTimeFormatter SESSION_TIME =
-            DateTimeFormatter.ofPattern("M/d HH:mm");
+            DateTimeFormatter.ofPattern("M/d HH:mm", Locale.CHINA);
 
     private static final JsonNodeFactory FACTORY = JsonNodeFactory.instance;
 
@@ -78,7 +80,11 @@ public final class SessionCards {
 
     public static ObjectNode buildResumeCard(ResumeCardOptions options) {
         // TS Intl.DateTimeFormat 不带 timeZone → 运行时本地时区（对齐 systemDefault）
-        ZoneId zone = ZoneId.systemDefault();
+        return buildResumeCard(options, ZoneId.systemDefault());
+    }
+
+    /** 包内可见时区注入重载（T6②）：公开签名不变，测试钉 UTC 用。 */
+    static ObjectNode buildResumeCard(ResumeCardOptions options, ZoneId zone) {
         List<ObjectNode> elements = new ArrayList<>();
         if (!options.sessions().isEmpty()) {
             List<CliSessionSummary> sessions = options.sessions();

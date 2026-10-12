@@ -25,8 +25,10 @@ public final class CardActions {
     }
 
     /**
-     * 对齐 TS `data?.operator?.{field} ?? data?.operator_id?.{field} ?? ''`（?? 链）。
-     * asText 缺失/null 返回 "" 即 falsy，与 TS 一致（brief Step 2）。
+     * 近似 TS `data?.operator?.{field} ?? data?.operator_id?.{field} ?? ''`（?? 链）。
+     * 差异（T2②）：TS ?? 仅在 null/undefined 时回退——operator 存在但 open_id 为空串时
+     * TS 直接返回空串、不再看 operator_id；本实现把缺失/null 渲染出的 "" 也视作回退信号
+     * （brief Step 2 取舍），空串时会多走一档 operator_id 回退。
      */
     private static String firstText(JsonNode operator, String field, JsonNode operatorId) {
         String primary = operator.path(field).asText("");
@@ -38,6 +40,10 @@ public final class CardActions {
 
     /** 对齐 lark.ts:79-89。 */
     public static CardAction parseCardAction(JsonNode data) {
+        // T2①：TS data?.x 可选链对 null data 吞成 undefined，与空对象同果；Java .path() 会 NPE
+        if (data == null) {
+            data = FACTORY.objectNode();
+        }
         JsonNode action = data.path("action");
         String messageId = data.path("context").path("open_message_id").asText("");
         if (messageId.isEmpty()) {

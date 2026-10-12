@@ -19,8 +19,11 @@ public final class MessageParser {
     private MessageParser() {
     }
 
-    /** TS JSON.parse（SyntaxError 冒泡）→ unchecked IllegalArgumentException（设计裁决 10）。 */
-    private static JsonNode parseContent(String content) {
+    /**
+     * TS JSON.parse（SyntaxError 冒泡）→ unchecked IllegalArgumentException（设计裁决 10）。
+     * 包内共享：MessageContent.extractMessageText 复用同一包装（T1②）。
+     */
+    static JsonNode parseContent(String content) {
         try {
             return MAPPER.readTree(content);
         } catch (JsonProcessingException e) {
@@ -107,7 +110,10 @@ public final class MessageParser {
             // TS paragraphs.flat() 只有一层嵌套 → 双层遍历
             for (JsonNode paragraph : paragraphs) {
                 if (!paragraph.isArray()) {
-                    continue; // TS flat()：非数组段保留为元素，其 el.tag 非 'img' → 跳过
+                    // 差异（T1①）：TS flat() 把非数组段（对象）原样保留进扁平结果，
+                    // 若该对象恰为 {tag:'img', image_key} 形态，TS 仍会提取该图片；
+                    // Java 此处整段跳过，不提取。
+                    continue;
                 }
                 for (JsonNode element : paragraph) {
                     if ("img".equals(element.path("tag").asText("")) && isTruthy(element.path("image_key"))) {

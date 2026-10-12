@@ -28,8 +28,8 @@ public final class CardText {
     // card.ts:962 splitLongText 默认参
     public static final int SPLIT_DEFAULT_MAX = 4_000;
 
-    /** card.ts:78-90 TOOL_ICONS。 */
-    private static final Map<String, String> TOOL_ICONS = Map.ofEntries(
+    /** card.ts:78-90 TOOL_ICONS（T4①：公开唯一副本，TaskCards 共用；Map.ofEntries 不可变）。 */
+    public static final Map<String, String> TOOL_ICONS = Map.ofEntries(
             Map.entry("Agent", "🧩"),
             Map.entry("Bash", "⌘"),
             Map.entry("Edit", "✏️"),
@@ -51,9 +51,11 @@ public final class CardText {
     private static final Pattern LINE_START_FENCE = Pattern.compile("^```", Pattern.MULTILINE);
 
     /** card.ts:145 {@code /\n(?:---|#{1,6}\s+[^\n]+)\s*$/}（无 MULTILINE，$ 即串尾）。
-     * 差异注释：\s 双向差异——Java UNICODE_CHARACTER_CLASS 的 \s 额外匹配 U+0085（NEL）与
-     * U+001C-001F（文件/组分隔符），JS \s 不匹配；JS \s 额外匹配 U+FEFF（BOM），Java 不匹配。
-     * 预览正文不含前导 BOM 与 C0 控制符场景，忽略。 */
+     * 差异注释：\s 差异是单向的——Java UNICODE_CHARACTER_CLASS 的 \s 额外匹配
+     * U+0085（NEL），JS \s 不匹配；JS \s 额外匹配 U+FEFF（BOM），Java 不匹配。
+     * （曾误记 Java \s 额外匹配 U+001C-001F：那是 Character.isWhitespace 的行为，
+     * 正则 \s 走 Unicode White_Space 属性，实测不含 U+001C-001F——见错题本。）
+     * 预览正文不含前导 BOM 与 NEL 场景，忽略。 */
     private static final Pattern TAIL_DECORATION =
             Pattern.compile("\\n(?:---|#{1,6}\\s+[^\\n]+)\\s*$", Pattern.UNICODE_CHARACTER_CLASS);
 
