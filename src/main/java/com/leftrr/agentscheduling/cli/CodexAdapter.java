@@ -2,6 +2,7 @@ package com.leftrr.agentscheduling.cli;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.NullNode;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -119,6 +120,10 @@ public final class CodexAdapter implements CliAdapter {
                 JsonNode input = item.path("arguments");
                 if (input.isMissingNode() || input.isNull()) {
                     input = item.path("input"); // 对齐 `arguments ?? input`
+                }
+                if (input.isMissingNode()) {
+                    // arguments 与 input 皆缺：TS undefined 经 JSON 序列化为 null 的形态，M6 消费侧用 isNull() 判空
+                    input = NullNode.getInstance();
                 }
                 events.add(new CliEvent.ToolCallEvent(id, text(item, "tool"), input));
             }

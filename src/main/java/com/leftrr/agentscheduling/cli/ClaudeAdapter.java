@@ -81,7 +81,8 @@ public final class ClaudeAdapter implements CliAdapter {
             return List.of();
         }
 
-        String sessionId = text(event, "session_id");
+        // 对齐 TS `...(sessionId ? { sessionId } : {})`：jsTrim 后空（含空串/空白串）不展开该字段 → null
+        String sessionId = sessionOrNull(event);
         if ("system".equals(text(event, "type")) && "init".equals(text(event, "subtype"))
                 && sessionId != null) {
             return List.of(new CliEvent.SessionEvent(sessionId));
@@ -128,14 +129,18 @@ public final class ClaudeAdapter implements CliAdapter {
                 if (toolUseId == null) {
                     continue;
                 }
-                events.add(new CliEvent.ToolEndEvent(toolUseId, block.path("is_error").asBoolean(false)));
+                // 对齐 TS `is_error === true`：字符串 "true" 等非布尔值不算失败
+                events.add(new CliEvent.ToolEndEvent(toolUseId,
+                        block.path("is_error").isBoolean() && block.path("is_error").asBoolean()));
             }
             return events;
         }
         if (!"result".equals(text(event, "type"))) {
             return List.of();
         }
-        if (event.path("is_error").asBoolean(false)) {
+        // 对齐 TS `is_error === true`：字符串 "true" 等非布尔值不触发 error 事件
+        JsonNode isError = event.path("is_error");
+        if (isError.isBoolean() && isError.asBoolean()) {
             JsonNode result = event.path("result");
             return List.of(new CliEvent.ErrorEvent(
                     result.isTextual() ? result.asText() : "Claude Code 执行失败", sessionId));
@@ -150,6 +155,12 @@ public final class ClaudeAdapter implements CliAdapter {
     private static String text(JsonNode node, String field) {
         JsonNode value = node.path(field);
         return value.isTextual() ? value.asText() : null;
+    }
+
+    /** 对齐 TS `...(sessionId ? { sessionId } : {})`：缺失或 jsTrim 后空不展开该字段，返回 null。 */
+    private static String sessionOrNull(JsonNode event) {
+        String sessionId = text(event, "session_id");
+        return sessionId != null && !JsText.jsTrim(sessionId).isEmpty() ? sessionId : null;
     }
 
     private static Long longOrNull(JsonNode node, String field) {
@@ -232,7 +243,9 @@ public final class ClaudeAdapter implements CliAdapter {
         int from = normalized.startsWith("/")
                 ? Math.max(0, parts.size() - 2)
                 : Math.max(0, parts.size() - 3);
-        return String.join("/", parts.subList(from, parts.size()));
+        // 对齐 TS 消费端 `...(detail ? { detail } : {})`：归约结果为空串（如输入 "/"）时 falsy 不展开 → null
+        String joined = String.join("/", parts.subList(from, parts.size()));
+        return joined.isEmpty() ? null : joined;
     }
 
     /** 对齐 shortText()：\s+ 折叠 → jsTrim → 超长截 71 字符加 …。 */

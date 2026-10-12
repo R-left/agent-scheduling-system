@@ -315,6 +315,8 @@ public final class NativeSessions {
             if (child.isAlive()) {
                 CliProcess.kill(child);
             }
+            // 流关闭与 CliRunner 的差异：stdin 写入散布在 JSON-RPC 应答处理中，无 try-with-resources
+            // 覆盖写线程路径，故此处 finally 显式关 stdin/stdout（不改行为，仅注释说明）
             try {
                 child.getOutputStream().close();
             } catch (IOException ignored) {

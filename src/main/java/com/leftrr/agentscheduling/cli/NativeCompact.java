@@ -30,6 +30,10 @@ public final class NativeCompact {
 
     private NativeCompact() {}
 
+    /**
+     * compact 参数。cancellation 为每任务新建的 CancellationToken（per-run），
+     * 不共享复用、不读 ActiveRun.cancelMode（同 CliRunner 措辞）。
+     */
     public record Options(
             CliAdapter adapter,
             String sessionId,
@@ -104,8 +108,10 @@ public final class NativeCompact {
                                 && "compact_boundary".equals(text(message, "subtype"))) {
                             completed = true;
                         }
+                        // 对齐 TS `is_error === true`：字符串 "true" 等非布尔值不算失败
+                        JsonNode isError = message.path("is_error");
                         if ("result".equals(text(message, "type"))
-                                && message.path("is_error").asBoolean(false)) {
+                                && isError.isBoolean() && isError.asBoolean()) {
                             JsonNode result = message.path("result");
                             failReason = result.isTextual()
                                     ? result.asText()
@@ -146,6 +152,9 @@ public final class NativeCompact {
         }
 
         // 终态判定优先级对齐 TS fail() 先到先得：timeout → cancelled → is_error → 退出码 → 无 boundary
+        // 窗口差异（Task 8 挂账保留）：TS 严格按事件到达序在回调内定终态，Java 在循环结束后按固定优先级判定，
+        // timeout/cancel 与进程退出同瞬间竞态时终态归属可能与 TS 不同；窗口极窄且各终态文案一致，不值得为对齐
+        // 引入到达序追踪，故不改。
         if (timedOut.get()) {
             throw new CliExecutionException(displayName + " 上下文整理超时");
         }
@@ -231,7 +240,7 @@ public final class NativeCompact {
                         CliProcess.kill(child); // 对齐 TS fail：立即收兵
                         break;
                     }
-                    if (message.path("id").asInt(0) == 1) {
+                    if (message.path("id").isInt() && message.path("id").asInt() == 1) {
                         // initialize 应答 → 发 initialized 通知 + thread/resume
                         try {
                             NativeSessions.writeJsonLine(stdin, Map.of(
@@ -248,7 +257,7 @@ public final class NativeCompact {
                         }
                         continue;
                     }
-                    if (message.path("id").asInt(0) == 2) {
+                    if (message.path("id").isInt() && message.path("id").asInt() == 2) {
                         // thread/resume 应答 → 发 thread/compact/start
                         try {
                             ObjectNode start = MAPPER.createObjectNode();
@@ -290,6 +299,8 @@ public final class NativeCompact {
             if (child.isAlive()) {
                 CliProcess.kill(child);
             }
+            // 流关闭与 CliRunner 的差异：stdin 写入散布在 JSON-RPC 应答处理中，无 try-with-resources
+            // 覆盖写线程路径，故此处 finally 显式关闭（CliRunner 由写线程自身 try-with-resources 收口）
             try {
                 child.getOutputStream().close();
             } catch (IOException ignored) {
@@ -298,6 +309,8 @@ public final class NativeCompact {
         }
 
         // 终态判定优先级对齐 TS fail()/succeed() 先到先得：compacted → timeout → cancelled → error → 退出码
+        // 窗口差异（Task 8 挂账保留，同 runClaudeCompact 注释）：TS 到达序定终态 vs Java 固定优先级，
+        // 竞态同瞬间时终态归属可能不同；窗口极窄且文案一致，故不改。
         if (compacted) {
             return new Result(options.sessionId(), true, null);
         }
