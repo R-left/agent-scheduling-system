@@ -229,4 +229,48 @@ class TaskProgressTrackerTest {
         TaskProgressSnapshot fromAccept = tracker.accept(new CliEvent.ContextEvent(777));
         assertEquals(tracker.snapshot(), fromAccept);
     }
+
+    // M6 Task 1（裁决 3）：accept（任务虚拟线程回调）与 snapshot（心跳线程）并发，
+    // 固定轮数狂打后无异常且最终计数一致。钉住 accept/snapshot 的 synchronized 语义。
+    @Test
+    void concurrentAcceptAndSnapshotStayConsistent() throws Exception {
+        var tracker = new TaskProgressTracker(new AtomicLong(1000)::get, null, false);
+        int rounds = 5_000;
+        var pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        var start = new java.util.concurrent.CountDownLatch(1);
+        var acceptor = pool.submit(() -> {
+            try {
+                start.await();
+                for (int i = 0; i < rounds; i++) {
+                    tracker.accept(start("t" + i, "Bash", "运行命令", "ls"));
+                    tracker.accept(end("t" + i, false));
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError(e);
+            }
+        });
+        var reader = pool.submit(() -> {
+            try {
+                start.await();
+                for (int i = 0; i < 20_000; i++) {
+                    tracker.snapshot();
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError(e);
+            }
+        });
+        start.countDown();
+        // Future.get 让子线程的任何异常（含并发修改异常）在主测试线程冒泡
+        acceptor.get(30, java.util.concurrent.TimeUnit.SECONDS);
+        reader.get(30, java.util.concurrent.TimeUnit.SECONDS);
+        pool.shutdown();
+
+        var snap = tracker.snapshot();
+        assertEquals(rounds, snap.toolCount());
+        assertEquals(rounds, snap.completedCount());
+        assertTrue(snap.activities().size() <= 12, "activities 应维持 splice(12) 截断");
+        assertEquals("正在分析执行结果", snap.current(), "activeTools 已全部收尾，回落分析文案");
+    }
 }

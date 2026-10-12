@@ -39,7 +39,9 @@ public final class TaskProgressTracker {
         this.startedAt = now.getAsLong();
     }
 
-    public TaskProgressSnapshot accept(CliEvent event) {
+    // M6 裁决 3：accept 在任务虚拟线程（CLI 事件回调）被调，snapshot 在心跳线程被调，
+    // TS 单事件循环无此竞态，Java 侧必须互斥。对象监视器即可：临界区极短、无阻塞 IO。
+    public synchronized TaskProgressSnapshot accept(CliEvent event) {
         if (event instanceof CliEvent.ContextEvent e) {
             if (contextStartTokens == null) { // 对齐 ??=
                 contextStartTokens = e.usedTokens();
@@ -66,7 +68,7 @@ public final class TaskProgressTracker {
         return snapshot();
     }
 
-    public TaskProgressSnapshot snapshot() {
+    public synchronized TaskProgressSnapshot snapshot() {
         ActiveTool active = null;
         for (ActiveTool tool : activeTools.values()) {
             active = tool; // 对齐 [...values()].at(-1)
