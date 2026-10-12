@@ -10,7 +10,7 @@ class CliEventTest {
     @Test
     void constructsAllEightEventKinds() throws Exception {
         // 冒烟：编译期验证 sealed 许可与 record 构造，并断言字段值
-        CliRunStats stats = new CliRunStats(1, 2, 3L, 4L, 5L, 6L, 7L, 8L);
+        CliRunStats stats = new CliRunStats(1, 2, 3L, 4L, 5L, 6L, 7L, 8L, 9L);
 
         CliEvent.SessionEvent session = new CliEvent.SessionEvent("s1");
         assertEquals("s1", session.sessionId());
