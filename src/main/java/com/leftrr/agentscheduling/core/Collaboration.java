@@ -127,16 +127,26 @@ public final class Collaboration {
         return JsText.jsTrim(node.asText());
     }
 
-    /** 内存收件箱（TS CollaborationInbox；重启即失，roadmap「运行时状态」口径）。 */
+    /**
+     * 内存收件箱（TS CollaborationInbox；重启即失，roadmap「运行时状态」口径）。
+     *
+     * <p>并发形态（M7 Task 5 累积裁决 a，Task 2 审查 Minor ㉇）：TS 单事件循环下
+     * register（dispatch 线程）与 consume（消息线程）天然串行；Java 两侧在不同虚拟线程，
+     * 裸 LinkedHashMap 跨线程竞争。register/consume 均收 {@code synchronized}——consume 的
+     * get+check+remove 是复合操作，ConcurrentHashMap 只能保证单键原子性、无法表达
+     * 「校验通过即取走」的整段语义（两个并发 consume 可能都读到非 null 而双取走），
+     * 方法级互斥才与 TS 同同步段原子性逐点对齐。方法体内无阻塞调用，锁竞争面仅
+     * 协作派发/回传路径，无死锁风险。LinkedHashMap 保持原字段不动。</p>
+     */
     public static final class CollaborationInbox {
         private final Map<String, CollaborationMessage> messages = new LinkedHashMap<>();
 
-        public void register(CollaborationMessage message) {
+        public synchronized void register(CollaborationMessage message) {
             messages.put(message.dispatchId(), message);
         }
 
         /** dispatchId 不存在或 toBotId 不匹配返回 null 且不删除（对齐 TS）。 */
-        public CollaborationMessage consume(String dispatchId, String toBotId) {
+        public synchronized CollaborationMessage consume(String dispatchId, String toBotId) {
             CollaborationMessage message = messages.get(dispatchId);
             if (message == null || !message.toBotId().equals(toBotId)) {
                 return null;

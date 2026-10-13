@@ -5,7 +5,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.leftrr.agentscheduling.cli.CliRunResult;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -217,5 +220,39 @@ class CollaborationTest {
         var consumed = inbox.consume("d1", "writer");
         assertEquals(message, consumed);
         assertNull(inbox.consume("d1", "writer")); // 已删除，二次 consume null
+    }
+
+    // 13. CollaborationInbox 并发形态（M7 Task 5 累积裁决 a）：同一 dispatchId 并发
+    // consume 仅一个线程取走（get+check+remove 复合操作原子，对齐 TS 单事件循环同段语义）
+    @Test
+    void inboxConcurrentConsumeOnlyOneWinner() throws Exception {
+        var inbox = new Collaboration.CollaborationInbox();
+        var message = new Collaboration.CollaborationMessage(
+                "d1", "task-1", "ou", null, "leader", "writer", "leader",
+                "obj", "inst", null, 1, 3, "C:/ws");
+        inbox.register(message);
+        int threads = 16;
+        var latch = new CountDownLatch(1);
+        var winner = new AtomicInteger(0);
+        var workers = new ArrayList<Thread>();
+        for (int i = 1; i <= threads; i++) {
+            int index = i;
+            workers.add(Thread.ofVirtual().start(() -> {
+                try {
+                    latch.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+                if (inbox.consume("d1", "writer") != null) {
+                    winner.incrementAndGet();
+                }
+            }));
+        }
+        latch.countDown();
+        for (Thread worker : workers) {
+            worker.join(5_000);
+        }
+        assertEquals(1, winner.get());
     }
 }

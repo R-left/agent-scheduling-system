@@ -10,6 +10,14 @@
   其余（含 CollaborationService 成功日志、SessionView markSessionIdle）走根
   STDOUT appender——out/err 语义与 TS 对齐。未切锚点的 System.out/err 直写
   不经此处，配置不改变其行为。
+
+  M7 Task 5（累积裁决 b，Task 2 审查 concern ⑦）：BotMessageOrchestrator 与
+  DocumentCommentScheduler 的 TS console.error（[下载失败]/[卡片] 无 message_id/
+  [任务] 回传或收尾失败/[CLI] 执行失败/[会话] 保存空闲状态失败/[产品评论] 处理失败
+  与回写失败等）定向 STDERR，console.log/warn 保持 STDOUT——两类的日志以 info 为主、
+  error 为辅，logger 级 appender 会把 info/warn 一并吞进同一出口，故按 appender 挂
+  ExactLevelFilter（logging/ExactLevelFilter.java，方案评估见其 javadoc）：每个
+  logger 挂 STDOUT 版（error 剔除）+ STDERR 版（仅 error），additivity=false 防重复。
 -->
 <configuration>
   <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
@@ -24,11 +32,42 @@
     </encoder>
   </appender>
 
+  <appender name="ORCH_STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+    <filter class="com.leftrr.agentscheduling.logging.ExactLevelFilter">
+      <level>ERROR</level>
+      <onMatch>DENY</onMatch>
+      <onMismatch>ACCEPT</onMismatch>
+    </filter>
+    <encoder>
+      <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%level] %msg%n</pattern>
+    </encoder>
+  </appender>
+  <appender name="ORCH_STDERR" class="ch.qos.logback.core.ConsoleAppender">
+    <filter class="com.leftrr.agentscheduling.logging.ExactLevelFilter">
+      <level>ERROR</level>
+      <onMatch>ACCEPT</onMatch>
+      <onMismatch>DENY</onMismatch>
+    </filter>
+    <target>System.err</target>
+    <encoder>
+      <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%level] %msg%n</pattern>
+    </encoder>
+  </appender>
+
   <logger name="com.leftrr.agentscheduling.app.CardActionHandler" level="error" additivity="false">
     <appender-ref ref="STDERR"/>
   </logger>
   <logger name="com.leftrr.agentscheduling.app.Notifications" level="error" additivity="false">
     <appender-ref ref="STDERR"/>
+  </logger>
+
+  <logger name="com.leftrr.agentscheduling.app.BotMessageOrchestrator" additivity="false">
+    <appender-ref ref="ORCH_STDOUT"/>
+    <appender-ref ref="ORCH_STDERR"/>
+  </logger>
+  <logger name="com.leftrr.agentscheduling.app.DocumentCommentScheduler" additivity="false">
+    <appender-ref ref="ORCH_STDOUT"/>
+    <appender-ref ref="ORCH_STDERR"/>
   </logger>
 
   <root level="info">
