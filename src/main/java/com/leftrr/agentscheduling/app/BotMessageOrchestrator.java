@@ -2,30 +2,44 @@ package com.leftrr.agentscheduling.app;
 
 import com.leftrr.agentscheduling.cli.CliAdapter;
 import com.leftrr.agentscheduling.cli.CliAdapterRegistry;
+import com.leftrr.agentscheduling.cli.CliEvent;
 import com.leftrr.agentscheduling.cli.CliId;
+import com.leftrr.agentscheduling.cli.CliRunResult;
+import com.leftrr.agentscheduling.cli.NativeCompact;
 import com.leftrr.agentscheduling.core.ActiveRun;
 import com.leftrr.agentscheduling.core.BotRegistry;
 import com.leftrr.agentscheduling.core.CancellationToken;
+import com.leftrr.agentscheduling.core.CancelMode;
 import com.leftrr.agentscheduling.core.Clarification;
 import com.leftrr.agentscheduling.core.CliRequest;
 import com.leftrr.agentscheduling.core.Collaboration;
 import com.leftrr.agentscheduling.core.CommandParser;
 import com.leftrr.agentscheduling.core.MessageAddress;
 import com.leftrr.agentscheduling.core.ProductDeliveryMode;
+import com.leftrr.agentscheduling.core.ProductSpec;
 import com.leftrr.agentscheduling.core.ResolvedSession;
 import com.leftrr.agentscheduling.core.Session;
 import com.leftrr.agentscheduling.core.SessionStatus;
 import com.leftrr.agentscheduling.core.SlashCommand;
+import com.leftrr.agentscheduling.core.TaskProgressSnapshot;
+import com.leftrr.agentscheduling.core.TaskProgressTracker;
 import com.leftrr.agentscheduling.core.TopicAddress;
 import com.leftrr.agentscheduling.core.TopicTask;
 import com.leftrr.agentscheduling.core.Workspace;
 import com.leftrr.agentscheduling.im.Bot;
+import com.leftrr.agentscheduling.im.BotIdentity;
+import com.leftrr.agentscheduling.im.CardScheduler;
+import com.leftrr.agentscheduling.im.CardText;
 import com.leftrr.agentscheduling.im.ClarificationCards;
 import com.leftrr.agentscheduling.im.ExtractedResource;
 import com.leftrr.agentscheduling.im.IncomingMessage;
 import com.leftrr.agentscheduling.im.Mention;
 import com.leftrr.agentscheduling.im.MessageParser;
+import com.leftrr.agentscheduling.im.ProductSpecCards;
+import com.leftrr.agentscheduling.im.ScheduledCardScheduler;
+import com.leftrr.agentscheduling.im.SessionCards;
 import com.leftrr.agentscheduling.im.TaskCards;
+import com.leftrr.agentscheduling.im.ThrottledCardUpdater;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,6 +48,11 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -41,7 +60,16 @@ import java.util.stream.Collectors;
 /**
  * onMessage 主流程编排。对齐 TS 版 src/index.ts L150-766 startConfiguredBot 内的
  * onMessage 闭包；M7 Task 2 实现前半（L151-377：协作识别 → 任务卡发送），
- * Task 3 在本方法尾部续写后半（L379-765：进度心跳、执行与收尾链）。
+ * Task 3 实现后半（L379-765：进度心跳、执行与收尾链三分支）。
+ *
+ * <p>Task 3 结构申报：TS {@code void execution.then().catch().finally().catch()} 收尾链
+ * 按裁决 6 直译为嵌套 try/catch/finally 模板（then/catch/finally 抛出的异常统一落外层
+ * 兜底 catch）；TS 分支内 {@code return} 落 Java 裸 {@code return}（finally 照常执行、
+ * 不触发外层兜底，语义等价）；执行体（executeCli/compactCliSession）阻塞当前线程——
+ * 按 R11/裁决 5，Task 5 将每条消息投递到独立虚拟线程，同步阻塞即 TS 后台化 Promise 的
+ * 等价表达（事件回调由 CliRunner 读循环线程消费，回调尽快返回的语义不变）。
+ * 心跳（裁决 7）与 ThrottledCardUpdater（M4 备案组装义务）见方法内注释。
+ * adapter 解析经包私有构造注入缝（ClarificationRunner 先例），生产路径按注册表解析。</p>
  *
  * <p>闭包捕获集（构造注入）：TS 闭包捕获 config、bot（方法参）、runtime（内含
  * sessions/teamRegistry/activeRuns/contextWindows/botRuntimes/processedCollaborationTurns/
@@ -73,6 +101,9 @@ public final class BotMessageOrchestrator {
     /** 对齐 TS /任务编号：([a-f0-9]{12})/：全角冒号逐字（裁决 11），String.match → Matcher.find。 */
     private static final Pattern DISPATCH_ID_PATTERN = Pattern.compile("任务编号：([a-f0-9]{12})");
 
+    /** TS setInterval(renderProgress, 1_000) 的 1s 心跳间隔（裁决 7）。 */
+    static final long PROGRESS_HEARTBEAT_INTERVAL_MS = 1_000;
+
     private final AppRuntime runtime;
     private final BotRegistry.BotConfig config;
     private final CollaborationService collaborationService;
@@ -81,14 +112,32 @@ public final class BotMessageOrchestrator {
     public BotMessageOrchestrator(AppRuntime runtime, BotRegistry.BotConfig config,
             CollaborationService collaborationService,
             ProductDeliveryMode defaultProductDeliveryMode) {
+        this(runtime, config, collaborationService, defaultProductDeliveryMode,
+                CliAdapterRegistry::get);
+    }
+
+    /** 包私有重载：adapter 解析函数可注入（ClarificationRunner 先例），生产路径按注册表解析。 */
+    BotMessageOrchestrator(AppRuntime runtime, BotRegistry.BotConfig config,
+            CollaborationService collaborationService,
+            ProductDeliveryMode defaultProductDeliveryMode,
+            Function<CliId, CliAdapter> adapterResolver) {
         this.runtime = runtime;
         this.config = config;
         this.collaborationService = collaborationService;
         this.defaultProductDeliveryMode = defaultProductDeliveryMode;
+        this.adapterResolver = adapterResolver;
     }
+
+    private final Function<CliId, CliAdapter> adapterResolver;
 
     /** TS onMessage 闭包主体（index.ts:150-766）。 */
     public void onMessage(IncomingMessage msg, Bot bot) throws IOException, InterruptedException {
+        onMessage(msg, bot, adapterResolver);
+    }
+
+    /** 主体控制流；adapterResolver 供测试替身替换（M7 Task 3 执行段起消费）。 */
+    void onMessage(IncomingMessage msg, Bot bot, Function<CliId, CliAdapter> adapterResolver)
+            throws IOException, InterruptedException {
         // L151-152
         String resolved = MessageParser.resolveMentions(msg.text(), msg.mentions());
         String taskId = TopicTask.topicTaskId(new TopicAddress(
@@ -125,11 +174,13 @@ public final class BotMessageOrchestrator {
                 return;
             }
             String turnKey = Collaboration.collaborationTurnKey(pending);
-            if (runtime.processedCollaborationTurns().contains(turnKey)) {
+            // Task 2 审查 Minor 1 修复：contains→add 两步改原子 add。TS 侧 check→add 位于
+            // 同一同步段（单事件循环）天然原子；Java 每消息一虚拟线程，并发重复协作消息
+            // 在两步间可双通过，CHM keySet 的 add 原子性对齐 TS 同段语义（false = 已存在）
+            if (!runtime.processedCollaborationTurns().add(turnKey)) {
                 LOGGER.info("[协作] 忽略重复消息 {}", turnKey);
                 return;
             }
-            runtime.processedCollaborationTurns().add(turnKey);
             collaboration = pending;
         }
 
@@ -164,7 +215,7 @@ public final class BotMessageOrchestrator {
         }
 
         // L215-216
-        CliAdapter cliAdapter = CliAdapterRegistry.get(session.cliId());
+        CliAdapter cliAdapter = adapterResolver.apply(session.cliId());
         boolean isCompacting = command instanceof SlashCommand.CompactCommand;
 
         // L217-235 图片/文件下载（单文件失败不中断整体）
@@ -273,9 +324,392 @@ public final class BotMessageOrchestrator {
         }
         LOGGER.info("[卡片] 已发送 message_id={} inThread={}", cardId, hasThread);
 
-        // M7 Task 3：进度心跳 + 执行 + 收尾三分支（index.ts L379-765）由此续写；
-        // prompt / collaboration / senderRuntime / taskId / isCompacting / cliAdapter
-        // / downloadedFiles 等前置变量均已就绪。
+        // ================================================================
+        // M7 Task 3：进度心跳 + 执行 + 收尾三分支（index.ts L379-765）
+        // ================================================================
+
+        // session 在 L327-336 协作工作区切换后不再重新赋值；Java lambda 只捕 effectively
+        // final 局部变量，此处取最终快照（即 TS let 绑定在闭包执行期的同一取值）
+        Session execSession = session;
+
+        // L379-385 进度跟踪器。Date.now → System::currentTimeMillis（申报：tracker 仅以
+        // 差值计耗时，wall clock 直译即等价）；`!session.cliSessionId` 按 TS truthiness
+        // 落 isPresent（null/空串都算新会话）。
+        TaskProgressTracker progress = new TaskProgressTracker(System::currentTimeMillis,
+                runtime.contextWindows().get(execSession.id()),
+                !isPresent(execSession.cliSessionId()));
+        // M4 备案组装义务：ThrottledCardUpdater 必须配 ScheduledCardScheduler 进程级单例
+        // 与单线程 updateExecutor（串行化）；updateExecutor per-task 新建、finally 收尾
+        // （ClarificationRunner 同构先例）。
+        ExecutorService updateExecutor = Executors.newSingleThreadExecutor();
+        ThrottledCardUpdater cardUpdater = new ThrottledCardUpdater(
+                card -> bot.updateCard(cardId, card),
+                ScheduledCardScheduler.getInstance(), updateExecutor, 1_000);
+        // L386-396 renderProgress：compact 心跳 detail 固定文案且不推 progress 字段，
+        // 非 compact detail 取快照 current 并推 progress 字段（L396 条件展开）。
+        Runnable renderProgress = () -> {
+            TaskProgressSnapshot snapshot = progress.snapshot();
+            cardUpdater.push(TaskCards.buildTaskCard(new TaskCards.TaskCardOptions(
+                    taskCardTitle, TaskCards.TaskStatus.RUNNING,
+                    isCompacting
+                            ? "正在调用 " + cliAdapter.displayName() + " 原生上下文整理"
+                            : snapshot.current(),
+                    !isCompacting ? snapshot : null,
+                    null, null, null, execSession.id())));
+        };
+        // L397-398 setInterval(renderProgress, 1_000) + unref() → 裁决 7：ScheduledCardScheduler
+        // 无 fixed-rate，以 self-rescheduling 表达；daemon 调度线程 = unref 等价。
+        ProgressHeartbeat progressHeartbeat = new ProgressHeartbeat(
+                ScheduledCardScheduler.getInstance(), renderProgress,
+                PROGRESS_HEARTBEAT_INTERVAL_MS);
+        progressHeartbeat.start();
+
+        // L427-434 事件过滤：非 {tool_start, tool_end, context} 不 accept，accept 后推卡。
+        // 产品方案重试路径（分支二）复用同一消费者（TS 同款内联过滤逐字对应）。
+        Consumer<CliEvent> onProgressEvent = event -> {
+            if (!isProgressEvent(event)) {
+                return;
+            }
+            progress.accept(event);
+            renderProgress.run();
+        };
+
+        // L404-765 执行 + 收尾链（裁决 6 嵌套模板）。TS `void execution.then(...)` 的后台化
+        // 在 Java 落为每消息虚拟线程上的同步阻塞（裁决 5：Task 5 负责投递）；事件回调由
+        // CliRunner 读循环线程消费后尽快返回，"CLI 在后台继续执行"的语义不变。
+        // 模板形状：try { try { then 主体（三分支 return 自然落入 finally） }
+        //   catch { 取消/失败 }  finally { clearInterval + 条件 delete + markSessionIdle 容错 } }
+        // catch { 兜底 log }——then/catch/finally 抛出的异常统一落外层兜底。
+        try {
+            try {
+                // L404-434 执行体：compact 走 NativeCompact（结果映射裁决 8），否则 executeCli
+                CliRunResult result = isCompacting
+                        ? compactRunResult(NativeCompact.compactCliSession(
+                                new NativeCompact.Options(
+                                        cliAdapter,
+                                        // 裁决 8：对齐 TS `session.cliSessionId!` 非空断言
+                                        // （compact 必已有 CLI 会话，不可达即崩溃语义对齐）
+                                        Objects.requireNonNull(session.cliSessionId()),
+                                        session.workspaceDir(),
+                                        command instanceof SlashCommand.CompactCommand compactCommand
+                                                ? compactCommand.instructions()
+                                                : null,
+                                        run,
+                                        null)))
+                        : AppExecutions.executeCli(cliAdapter, prompt, session.workspaceDir(),
+                                session.cliSessionId(), run, onProgressEvent);
+
+                // ---- then 前置（L437-444）：clearInterval + 会话回写（均 !isCompacting；
+                //      contextWindowTokens 真值判断（0 不回写）沿裁决 12 口径）----
+                progressHeartbeat.stop();
+                if (!isCompacting && isPresent(result.sessionId())) {
+                    runtime.sessions().setCliSessionId(session.id(), result.sessionId());
+                }
+                if (!isCompacting && result.stats() != null
+                        && result.stats().contextWindowTokens() != null
+                        && result.stats().contextWindowTokens() != 0) {
+                    runtime.contextWindows().put(session.id(),
+                            result.stats().contextWindowTokens());
+                }
+
+                // ---- 分支一：澄清卡收尾（L445-480）----
+                Clarification.ClarificationRequest clarificationRequest =
+                        !isCompacting && config.skills().contains("grill-me")
+                                ? Clarification.findClarificationRequest(result.toolCalls())
+                                : null;
+                if (clarificationRequest != null) {
+                    Clarification.ClarificationFlow flow = runtime.clarificationFlows().create(
+                            new Clarification.CreateFlowOptions(
+                                    taskId,
+                                    config.id(),
+                                    session.id(),
+                                    collaboration != null
+                                            ? collaboration.ownerOpenId() : msg.senderOpenId(),
+                                    collaboration != null
+                                            ? collaboration.ownerUnionId() : msg.senderUnionId(),
+                                    collaboration != null
+                                            ? Collaboration.collaborationOrigin(collaboration)
+                                            : null,
+                                    msg.messageId(),
+                                    cardId,
+                                    hasThread,
+                                    clarificationRequest));
+                    removeActiveRun(session.id(), run);
+                    SessionView.markSessionIdle(runtime.sessions(), session.id());
+                    cardUpdater.finish(ClarificationCards.buildClarificationCard(flow));
+                    Notifications.sendResultNotification(bot, msg.messageId(),
+                            new BotIdentity(flow.ownerOpenId(), ""),
+                            "需要你确认 " + clarificationRequest.questions().size()
+                                    + " 个问题，请在上方卡片中选择。",
+                            hasThread);
+                    LOGGER.info("[澄清] 已发送交互卡片 questions={}",
+                            clarificationRequest.questions().size());
+                    return;
+                }
+
+                // ---- 分支二：产品方案收尾 + dispatch 合法性校验（L482-585）----
+                CliRunResult finalResult = result;
+                ProductSpec.ProductSpecRequest productSpecRequest = null;
+                boolean managesProductSpec = !isCompacting
+                        && (config.skills().contains("to-spec")
+                                || config.skills().contains("lark-doc"));
+                if (managesProductSpec) {
+                    ProductSpecSubmission submission = ProductSpecSubmission
+                            .ensureProductSpecSubmission(result, defaultProductDeliveryMode,
+                                    (retryPrompt, resultSessionId) -> AppExecutions.executeCli(
+                                            cliAdapter,
+                                            retryPrompt,
+                                            execSession.workspaceDir(),
+                                            // TS `resultSessionId ?? session.cliSessionId`：
+                                            // ?? 只回落 null/undefined（空串不回落）
+                                            resultSessionId != null
+                                                    ? resultSessionId : execSession.cliSessionId(),
+                                            run,
+                                            onProgressEvent));
+                    finalResult = submission.result();
+                    productSpecRequest = submission.request();
+                    if (isPresent(finalResult.sessionId())) {
+                        runtime.sessions().setCliSessionId(session.id(), finalResult.sessionId());
+                    }
+                    if (finalResult.stats() != null
+                            && finalResult.stats().contextWindowTokens() != null
+                            && finalResult.stats().contextWindowTokens() != 0) {
+                        runtime.contextWindows().put(session.id(),
+                                finalResult.stats().contextWindowTokens());
+                    }
+                }
+                Collaboration.DispatchTaskRequest dispatchRequest = !isCompacting
+                        ? Collaboration.findDispatchTaskRequest(finalResult.toolCalls())
+                        : null;
+                if (dispatchRequest != null) {
+                    // L523-546 dispatch 合法性校验（四处 throw 文案逐字）
+                    // TS 读 agentOsConfig.teamLeaderId——TeamRegistry 即以该值构造（L73），
+                    // Java 侧经 runtime.teamRegistry().leaderBotId() 取同一真值（申报）
+                    if (!config.id().equals(runtime.teamRegistry().leaderBotId())) {
+                        throw new RuntimeException(
+                                "只有 CEO 助理可以调用 dispatch_task 派发团队任务");
+                    }
+                    if (runtime.teamRegistry().get(dispatchRequest.targetBotId()) == null) {
+                        throw new RuntimeException(
+                                "团队成员未注册或未启用: " + dispatchRequest.targetBotId());
+                    }
+                    if (dispatchRequest.targetBotId().equals(config.id())) {
+                        throw new RuntimeException(
+                                "不能把团队任务派发给当前 bot: " + config.id());
+                    }
+                    if (collaboration != null
+                            && collaboration.round() >= collaboration.maxRounds()) {
+                        throw new RuntimeException("协作任务已达到轮次上限 "
+                                + collaboration.maxRounds() + "，不能继续派发");
+                    }
+                }
+                if (productSpecRequest != null && dispatchRequest != null) {
+                    throw new RuntimeException("不能同时提交产品方案和派发团队任务");
+                }
+                if (productSpecRequest != null) {
+                    if (productSpecRequest
+                            instanceof ProductSpec.ProductSpecRequest.Local localRequest) {
+                        // TS `deliveryMode === 'local'`：sealed 两态即两交付模式
+                        ProductSpecDocuments.assertProductSpecDocuments(session.workspaceDir(),
+                                localRequest);
+                    }
+                    removeActiveRun(session.id(), run);
+                    SessionView.markSessionIdle(runtime.sessions(), session.id());
+                    ProductSpec.ProductSpecFlow flow = runtime.productSpecFlows().create(
+                            new ProductSpec.CreateFlowOptions(
+                                    taskId,
+                                    config.id(),
+                                    session.id(),
+                                    collaboration != null
+                                            ? collaboration.ownerOpenId() : msg.senderOpenId(),
+                                    collaboration != null
+                                            ? collaboration.ownerUnionId() : msg.senderUnionId(),
+                                    collaboration != null
+                                            ? Collaboration.collaborationOrigin(collaboration)
+                                            : null,
+                                    productSpecRequest));
+                    cardUpdater.finish(ProductSpecCards.buildProductSpecApprovalCard(flow));
+                    Notifications.sendResultNotification(bot, msg.messageId(),
+                            new BotIdentity(collaboration != null
+                                    ? collaboration.ownerOpenId() : msg.senderOpenId(), ""),
+                            "产品方案已生成，请查看上方确认卡。",
+                            hasThread);
+                    LOGGER.info("[产品文档] 已展示待确认产物");
+                    return;
+                }
+
+                // ---- 分支三：正常完成 + 派发/协作续转（L586-701）----
+                TaskProgressSnapshot snapshot = progress.snapshot();
+                cardUpdater.finish(isCompacting
+                        ? SessionCards.buildSessionNoticeCard(
+                                new SessionCards.SessionNoticeCardOptions(
+                                        isPresent(finalResult.answer())
+                                                ? "暂时无需整理" : "上下文已整理",
+                                        // TS `answer || [两段].join('\n\n')`：空串为 falsy 走兜底
+                                        isPresent(finalResult.answer())
+                                                ? finalResult.answer()
+                                                : String.join("\n\n",
+                                                        cliAdapter.displayName()
+                                                                + " 已在当前 CLI 会话内完成原生压缩。",
+                                                        "CLI 会话 ID 保持不变，下一条任务会继续使用"
+                                                                + "整理后的上下文。"),
+                                        isPresent(finalResult.answer()) ? "grey" : "green"))
+                        : TaskCards.buildTaskCard(new TaskCards.TaskCardOptions(
+                                taskCardTitle, TaskCards.TaskStatus.SUCCESS,
+                                "执行完成", snapshot,
+                                finalResult.answer(), finalResult.stats(), null, null)));
+                if (!isCompacting && CardText.answerNeedsContinuation(finalResult.answer())) {
+                    for (String chunk : CardText.splitLongText(
+                            CardText.answerContinuation(finalResult.answer()))) {
+                        bot.reply(msg.messageId(), chunk, hasThread);
+                    }
+                }
+                // 注意用原始 result 而非 finalResult（TS L615 同款）
+                LOGGER.info("[CLI] {} 完成 session_id={}", cliAdapter.id().id(),
+                        result.sessionId() != null ? result.sessionId() : "(无)");
+                if (collaboration == null) {
+                    Notifications.sendResultNotification(bot, msg.messageId(),
+                            new BotIdentity(msg.senderOpenId(), ""),
+                            isCompacting ? "上下文整理已完成，请查看上方结果。"
+                                    : "任务已完成，请查看上方结果。",
+                            hasThread);
+                }
+                if (!isCompacting) {
+                    try {
+                        if (dispatchRequest != null) {
+                            collaborationService.dispatch(
+                                    new CollaborationService.CollaborationDispatch(
+                                            config, bot, msg.messageId(),
+                                            dispatchRequest.targetBotId(),
+                                            taskId,
+                                            collaboration != null
+                                                    ? collaboration.ownerOpenId()
+                                                    : msg.senderOpenId(),
+                                            collaboration != null
+                                                    ? collaboration.ownerUnionId()
+                                                    : msg.senderUnionId(),
+                                            collaboration != null
+                                                    ? collaboration.reportToBotId()
+                                                    : config.id(),
+                                            dispatchRequest.objective(),
+                                            dispatchRequest.instruction(),
+                                            dispatchRequest.expectedOutput(),
+                                            collaboration != null
+                                                    ? collaboration.round() + 1 : 1,
+                                            collaboration != null
+                                                    ? collaboration.maxRounds()
+                                                    : config.collaborationMaxRounds(),
+                                            session.workspaceDir()));
+                            if (collaboration == null) {
+                                // targetName = botRuntimes.get(target)?.identity.name ?? targetBotId
+                                BotRuntime targetRuntime =
+                                        runtime.botRuntimes().get(dispatchRequest.targetBotId());
+                                String targetName = targetRuntime != null
+                                        ? targetRuntime.identity().name()
+                                        : dispatchRequest.targetBotId();
+                                Notifications.sendResultNotification(bot, msg.messageId(),
+                                        new BotIdentity(msg.senderOpenId(), ""),
+                                        "任务已交给 " + targetName + "，请查看上方协作消息。",
+                                        hasThread);
+                            }
+                        } else if (collaboration != null) {
+                            if (collaboration.reportToBotId().equals(config.id())) {
+                                Notifications.sendResultNotification(bot, msg.messageId(),
+                                        new BotIdentity(collaboration.ownerOpenId(), ""),
+                                        "协作任务“" + collaboration.objective()
+                                                + "”已经完成，请查看上方结果。",
+                                        hasThread);
+                            } else if (collaboration.round() >= collaboration.maxRounds()) {
+                                Notifications.sendResultNotification(bot, msg.messageId(),
+                                        new BotIdentity(collaboration.ownerOpenId(), ""),
+                                        "协作任务“" + collaboration.objective() + "”已达到 "
+                                                + collaboration.maxRounds()
+                                                + " 轮上限，请查看上方结果并决定下一步。",
+                                        hasThread);
+                            } else {
+                                // 回派 reportToBotId：instruction 三段 join('\n\n') 文案逐字
+                                BotRuntime selfRuntime = runtime.botRuntimes().get(config.id());
+                                String selfName = selfRuntime != null
+                                        ? selfRuntime.identity().name() : config.id();
+                                collaborationService.dispatch(
+                                        new CollaborationService.CollaborationDispatch(
+                                                config, bot, msg.messageId(),
+                                                collaboration.reportToBotId(),
+                                                collaboration.taskId(),
+                                                collaboration.ownerOpenId(),
+                                                collaboration.ownerUnionId(),
+                                                collaboration.reportToBotId(),
+                                                collaboration.objective(),
+                                                String.join("\n\n",
+                                                        selfName
+                                                                + " 已完成当前协作任务，下面是它的结果：",
+                                                        finalResult.answer(),
+                                                        "请基于这份结果继续组织后续工作：仍需其他成员参与时"
+                                                                + "使用 dispatch_task 继续派发；"
+                                                                + "已经可以交付时，直接向用户汇总结论。"),
+                                                "继续推进原任务，或在已经完成时向用户给出最终结论。",
+                                                collaboration.round() + 1,
+                                                collaboration.maxRounds(),
+                                                session.workspaceDir()));
+                            }
+                        }
+                    } catch (RuntimeException dispatchError) {
+                        LOGGER.error("[协作] 派发失败: {}", dispatchError.getMessage());
+                        bot.reply(msg.messageId(),
+                                "协作派发失败：" + dispatchError.getMessage(), hasThread);
+                    }
+                }
+            } catch (Throwable error) {
+                // ---- catch（L703-751）：先 clearInterval，再按 token 取消状态分岔 ----
+                progressHeartbeat.stop();
+                if (run.isCancelled()) {
+                    LOGGER.info("[CLI] 任务已取消");
+                    cardUpdater.finish(TaskCards.buildTaskCard(new TaskCards.TaskCardOptions(
+                            taskCardTitle, TaskCards.TaskStatus.CANCELLED,
+                            // cancelMode 三态 detail 文案逐字
+                            activeRun.cancelMode() == CancelMode.CLOSE
+                                    ? "本次任务已停止，当前会话已经关闭。"
+                                    : isCompacting
+                                            ? "整理已停止，当前 CLI 会话没有改变。"
+                                            : "本次任务已停止。你可以继续在当前话题里提问。",
+                            progress.snapshot(), null, null, null, null)));
+                    // 协作来源 bot 时通知的是 bot 身份（senderRuntime），否则消息发送者
+                    Notifications.sendResultNotification(bot, msg.messageId(),
+                            senderRuntime != null
+                                    ? senderRuntime.identity()
+                                    : new BotIdentity(msg.senderOpenId(), ""),
+                            "任务已停止，请查看上方状态。",
+                            hasThread);
+                    return;
+                }
+                String message = error.getMessage();
+                LOGGER.error("[CLI] 执行失败: {}", message);
+                cardUpdater.finish(TaskCards.buildTaskCard(new TaskCards.TaskCardOptions(
+                        taskCardTitle, TaskCards.TaskStatus.FAILED,
+                        isCompacting ? "上下文整理失败，当前 CLI 会话没有改变。"
+                                : "执行没有完成。你可以调整指令后，在当前话题里重试。",
+                        progress.snapshot(), null, null, message, null)));
+                Notifications.sendResultNotification(bot, msg.messageId(),
+                        senderRuntime != null
+                                ? senderRuntime.identity()
+                                : new BotIdentity(msg.senderOpenId(), ""),
+                        "任务执行失败，请查看上方错误信息。",
+                        hasThread);
+            } finally {
+                // ---- finally（L752-762）：clearInterval + 条件 delete + markSessionIdle 容错 ----
+                progressHeartbeat.stop();
+                removeActiveRun(session.id(), run);
+                try {
+                    SessionView.markSessionIdle(runtime.sessions(), session.id());
+                } catch (IOException | RuntimeException idleError) {
+                    LOGGER.error("[会话] 保存空闲状态失败: {}", idleError.getMessage());
+                }
+                updateExecutor.shutdownNow();
+            }
+        } catch (Throwable error) {
+            // 兜底 catch（L763-765）：then/catch/finally 抛出的异常统一落这里
+            LOGGER.error("[任务] 回传或收尾失败: {}", error.getMessage());
+        }
     }
 
     /**
@@ -336,6 +770,71 @@ public final class BotMessageOrchestrator {
         ActiveRun current = runtime.activeRuns().get(sessionId);
         if (current != null && current.token() == run) {
             runtime.activeRuns().remove(sessionId);
+        }
+    }
+
+    /** L427-434 事件过滤谓词：仅 {tool_start, tool_end, context} 参与进度聚合（包私有供直测）。 */
+    static boolean isProgressEvent(CliEvent event) {
+        return event instanceof CliEvent.ToolStartEvent
+                || event instanceof CliEvent.ToolEndEvent
+                || event instanceof CliEvent.ContextEvent;
+    }
+
+    /**
+     * L405-417 compact 结果映射成统一形状（裁决 8）：message null → {@code ""}（TS
+     * {@code result.message ?? ''}）、stats/toolCalls 置 null（TS undefined）。
+     */
+    private static CliRunResult compactRunResult(NativeCompact.Result result) {
+        return new CliRunResult(result.message() == null ? "" : result.message(),
+                result.sessionId(), null, null);
+    }
+
+    /**
+     * 进度心跳（裁决 7）：ScheduledCardScheduler 无 fixed-rate，以 self-rescheduling 表达
+     * TS {@code setInterval(renderProgress, 1_000)}——task 尾部重排 schedule(1s)；
+     * {@code stop()} = clearInterval 等价（volatile 停止标志 + cancel 挂起句柄，幂等）。
+     * 调度线程为 ScheduledCardScheduler 的 daemon 单例线程，对齐 TS {@code unref()}。
+     * 包私有供测试以手动调度器钉住自重排/停止机制。
+     */
+    static final class ProgressHeartbeat {
+        private final CardScheduler scheduler;
+        private final Runnable render;
+        private final long intervalMs;
+        private volatile boolean stopped;
+        private volatile CardScheduler.Cancellable pending;
+
+        ProgressHeartbeat(CardScheduler scheduler, Runnable render, long intervalMs) {
+            this.scheduler = scheduler;
+            this.render = render;
+            this.intervalMs = intervalMs;
+        }
+
+        void start() {
+            scheduleNext();
+        }
+
+        /** clearInterval 等价：置停止标志 + 取消挂起中的下一次调度。幂等。 */
+        void stop() {
+            stopped = true;
+            CardScheduler.Cancellable current = pending;
+            if (current != null) {
+                current.cancel();
+            }
+        }
+
+        private void scheduleNext() {
+            if (!stopped) {
+                pending = scheduler.schedule(this::tick, intervalMs);
+            }
+        }
+
+        private void tick() {
+            if (stopped) {
+                return;
+            }
+            render.run();
+            // 渲染期间 stop() 也可能到来：再查一次标志，杜绝停止后继续自重排
+            scheduleNext();
         }
     }
 }
