@@ -36,7 +36,10 @@ import java.util.concurrent.Executors;
  * runProductDocumentComment 内是分钟级阻塞 IO（CLI 子进程 + 飞书 REST），默认
  * commonPool 会占死有限平台线程；虚拟线程短命 daemon、无池化，调度器进程级常驻
  * 不 shutdown（对齐 TS 模块级 documentCommentQueues/processedDocumentCommentEvents
- * 常驻状态）。串行性完全由 CompletableFuture 链（前序完成才跑后继）保证，与线程无关。
+ * 常驻状态）。串行性由<b>两件事共同保证</b>（审查 Important-1 措辞修正）：CompletableFuture
+ * 链（前序完成才跑后继）+ 入队互斥——previous 读取与 put 收在 {@code synchronized(this)}
+ * （同 sessionId 并发调用对齐 TS 单事件循环同段原子性），FIFO 顺序本身依赖调用方
+ * 单线程有序到达不变量（R11：WS 回调按到达序投递）。
  * 虚拟线程恒 daemon = TS Promise 不阻止进程退出的等价表达。</p>
  *
  * <p>TS→Java 差异（逐点申报）：</p>
@@ -86,7 +89,12 @@ public final class DocumentCommentScheduler {
     private final AppRuntime runtime;
     /** 已处理评论事件键（插入序 FIFO，synchronized(this) 保护），对齐 TS Set 防重。 */
     private final Set<String> processedDocumentCommentEvents = new LinkedHashSet<>();
-    /** 按 flow.sessionId 的串行队列尾，对齐 TS documentCommentQueues。 */
+    /**
+     * 按 flow.sessionId 的串行队列尾，对齐 TS documentCommentQueues。
+     * 备案（审查 Minor-2）：已完成队列项可能滞留 map（queued 先于 put 完成的良性竞态
+     * 窗口，见类 javadoc），有界仅一轮——滞留项行为等价于 Promise.resolve 前序，由
+     * 下一轮同 sessionId 任务的 finally 条件删除回收。
+     */
     private final Map<String, CompletableFuture<Void>> documentCommentQueues =
             new ConcurrentHashMap<>();
     private final Executor executor;
@@ -151,21 +159,29 @@ public final class DocumentCommentScheduler {
                     return false;
                 });
 
-        // L813-814 previous（?? Promise.resolve → completedFuture；
-        // previous.catch(() => undefined) → exceptionally(e -> null)，失败前序不再阻塞后继）
-        CompletableFuture<Void> previous = documentCommentQueues.get(flow.sessionId());
-        CompletableFuture<Void> safePrevious = previous == null
-                ? CompletableFuture.completedFuture(null)
-                : previous.exceptionally(error -> null);
+        // L813-814 + L837 入队段（审查 Important-1）：previous 读取与 put 收进同一
+        // synchronized(this)（与 eventKey 防重同一锁对象）——同 sessionId 并发调用若在
+        // get 与 put 之间交错，两者会互读不到对方的前序、串行性被破坏；TS 单事件循环下
+        // 该段天然原子，Java 以互斥对齐。块内无阻塞调用（get/put 与 allOf 链构建均非
+        // 阻塞，thenAcceptAsync 仅登记依赖不执行体）。
+        // previous == null → TS ?? Promise.resolve()（completedFuture）；
+        // previous.catch(() => undefined) → exceptionally(e -> null)，失败前序不再阻塞后继。
+        CompletableFuture<Void> queued;
+        synchronized (this) {
+            CompletableFuture<Void> previous = documentCommentQueues.get(flow.sessionId());
+            CompletableFuture<Void> safePrevious = previous == null
+                    ? CompletableFuture.completedFuture(null)
+                    : previous.exceptionally(error -> null);
 
-        // L815-836 排队：allOf(previous, workingReaction) 后异步段执行体（try/finally
-        // 移除表情）；执行体异常进 queued（保留 message，见类 javadoc）
-        CompletableFuture<Void> queued = CompletableFuture
-                .allOf(safePrevious, workingReaction)
-                .thenAcceptAsync(ignored ->
-                        runQueued(bot, flow, comment, workingReaction.join()), executor);
-        // L837
-        documentCommentQueues.put(flow.sessionId(), queued);
+            // L815-836 排队：allOf(previous, workingReaction) 后异步段执行体（try/finally
+            // 移除表情）；执行体异常进 queued（保留 message，见类 javadoc）
+            queued = CompletableFuture
+                    .allOf(safePrevious, workingReaction)
+                    .thenAcceptAsync(ignored ->
+                            runQueued(bot, flow, comment, workingReaction.join()), executor);
+            // L837
+            documentCommentQueues.put(flow.sessionId(), queued);
+        }
 
         // L838-855 处理失败回写（回写再失败兜底 log）+ finally 条件删除（引用相等才删，
         // 防新任务入队后误清）
@@ -196,7 +212,11 @@ public final class DocumentCommentScheduler {
             commentRunner.run(
                     new ProductCommentRunner.ProductDocumentComment(runtime, bot, flow, comment));
         } catch (IOException | InterruptedException error) {
-            // TS await reject 对位：进 queued 由 catch 分支回写；保留原始 message（文案逐字）
+            // TS await reject 对位：进 queued 由 catch 分支回写；保留原始 message（文案逐字）。
+            // 中断恢复标志（审查 Minor-4）：包装上抛会丢中断状态，先补置再抛
+            if (error instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
             throw new RuntimeException(error.getMessage(), error);
         } finally {
             if (reactionAdded) {
