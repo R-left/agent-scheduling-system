@@ -80,7 +80,12 @@ public class CollaborationService {
             String senderName = senderRuntime != null
                     ? senderRuntime.identity().name()
                     : options.senderConfig().id();
-            // TS basename(workspaceDir) → Path.of(...).getFileName()
+            // TS basename(workspaceDir) → Path.of(...).getFileName()；
+            // ⑳：根路径（如 C:\、/）的 getFileName() 返回 null → .toString() 会 NPE，
+            // 而 TS basename 对根路径不抛（返回盘符/路径本身）——null-safe 回落完整路径字符串
+            Path workspacePath = Path.of(options.workspaceDir());
+            String workspaceName = workspacePath.getFileName() != null
+                    ? workspacePath.getFileName().toString() : options.workspaceDir();
             String cardMessageId = options.senderBot().replyCard(
                     options.replyToMessageId(),
                     CollaborationCards.buildCollaborationCard(
@@ -88,7 +93,7 @@ public class CollaborationService {
                                     senderName,
                                     target.identity().name(),
                                     reportTo.identity().name(),
-                                    Path.of(options.workspaceDir()).getFileName().toString(),
+                                    workspaceName,
                                     options.objective(),
                                     options.instruction(),
                                     options.expectedOutput(),
@@ -115,6 +120,7 @@ public class CollaborationService {
             runtime.collaborationInbox().consume(collaboration.dispatchId(), collaboration.toBotId());
             throw error;
         }
+        // ㉒：与裁决 8 其余各处口径一致——M7 统一切 SLF4J
         System.out.println("[协作] task=" + options.taskId()
                 + " " + options.senderConfig().id()
                 + " -> " + options.targetBotId()

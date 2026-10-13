@@ -54,6 +54,9 @@ public final class ProductCommentRunner {
         }
         // 包私有重载注入 adapter，供测试替身替换（ClarificationRunner 同款测试缝）；
         // 生产路径按注册表解析
+        // ⑱ 备案：adapter 解析从 TS 的主体控制流（transition 之后）移到公开入口——
+        // 终态可观察行为等价（解析失败的异常对调用方暴露形态不变，收尾清理路径一致）；
+        // 且 CliAdapterRegistry 注册表对 claude/codex 恒有单例，当前该差异分支不可触发
         runProductDocumentComment(options, session, CliAdapterRegistry.get(session.cliId()));
     }
 

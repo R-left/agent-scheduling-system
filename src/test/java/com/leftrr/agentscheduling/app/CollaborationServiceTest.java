@@ -24,6 +24,7 @@ import java.util.regex.Pattern;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -40,6 +41,8 @@ class CollaborationServiceTest {
     private static final Pattern DISPATCH_ID_IN_TEXT = Pattern.compile("任务编号：([0-9a-f]{12})");
 
     private static BotRegistry.BotConfig config(String id) {
+        // 末参 collaborationMaxRounds = 3：BotConfig 必填的协作最大轮数（对齐 TS 默认配置），
+        // 与 dispatchOptions 里的 round/maxRounds 断言取值保持一致
         return new BotRegistry.BotConfig(id, "app-" + id, "secret", CliId.CLAUDE,
                 "工程师", List.of(), null, "C:/ws/" + id, 3);
     }
@@ -184,7 +187,7 @@ class CollaborationServiceTest {
         f.runtime.botRuntimes().remove("worker");
         CollaborationService service = new CollaborationService(f.runtime);
 
-        RuntimeException e = assertThrowsRuntime(() ->
+        RuntimeException e = assertThrows(RuntimeException.class, () ->
                 service.dispatch(dispatchOptions(config("leader"), f.leaderBot, 1)));
 
         assertEquals("协作 bot 尚未就绪: worker", e.getMessage());
@@ -201,7 +204,7 @@ class CollaborationServiceTest {
         f.runtime.botRuntimes().remove("leader");
         CollaborationService service = new CollaborationService(f.runtime);
 
-        RuntimeException e = assertThrowsRuntime(() ->
+        RuntimeException e = assertThrows(RuntimeException.class, () ->
                 service.dispatch(dispatchOptions(config("leader"), f.leaderBot, 1)));
 
         assertEquals("结果接收 bot 尚未就绪: leader", e.getMessage());
@@ -215,7 +218,7 @@ class CollaborationServiceTest {
         f.runtime.botRuntimes().clear();
         CollaborationService service = new CollaborationService(f.runtime);
 
-        RuntimeException e = assertThrowsRuntime(() ->
+        RuntimeException e = assertThrows(RuntimeException.class, () ->
                 service.dispatch(dispatchOptions(config("leader"), f.leaderBot, 1)));
 
         assertEquals("协作 bot 尚未就绪: worker", e.getMessage());
@@ -313,7 +316,7 @@ class CollaborationServiceTest {
         };
         CollaborationService service = new CollaborationService(f.runtime);
 
-        RuntimeException e = assertThrowsRuntime(() ->
+        RuntimeException e = assertThrows(RuntimeException.class, () ->
                 service.dispatch(dispatchOptions(config("leader"), f.leaderBot, 1)));
 
         assertEquals("飞书没有返回协作卡片 message_id", e.getMessage());
@@ -330,7 +333,7 @@ class CollaborationServiceTest {
         f.leaderBot.mentionMessageId = null;
         CollaborationService service = new CollaborationService(f.runtime);
 
-        RuntimeException e = assertThrowsRuntime(() ->
+        RuntimeException e = assertThrows(RuntimeException.class, () ->
                 service.dispatch(dispatchOptions(config("leader"), f.leaderBot, 1)));
 
         assertEquals("飞书没有返回协作通知 message_id", e.getMessage());
@@ -348,14 +351,5 @@ class CollaborationServiceTest {
                 service.dispatch(dispatchOptions(config("leader"), f.leaderBot, 1)));
 
         assertEquals("[协作] task=task-001 leader -> worker round=1/3", stdout.strip());
-    }
-
-    private static RuntimeException assertThrowsRuntime(Runnable action) {
-        try {
-            action.run();
-        } catch (RuntimeException e) {
-            return e;
-        }
-        throw new AssertionError("预期抛出 RuntimeException，但没有抛出");
     }
 }

@@ -111,6 +111,9 @@ public final class CommandHandler {
                 List<SessionCards.TeamCardMember> members = new ArrayList<>();
                 for (BotRegistry.BotConfig member : runtime.teamRegistry().members()) {
                     BotRuntime memberRuntime = runtime.botRuntimes().get(member.id());
+                    // ⑨ 备案：botRuntimes 注册即带 identity（BotRuntime 构造必注入），
+                    // identity() 判空属防御性留置（TS ?. 单链在 identity 为 undefined 时本会抛）；
+                    // displayName 兜底 member.id 对齐 TS ?? member.id
                     members.add(new SessionCards.TeamCardMember(
                             member.id(),
                             memberRuntime != null && memberRuntime.identity() != null

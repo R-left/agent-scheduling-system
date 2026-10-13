@@ -543,9 +543,10 @@ class CommandHandlerTest {
     }
 
     @Test
-    void cd目录不存在时走catch文案() throws IOException {
+    void cd目录不存在时走catch文案(@TempDir Path base) throws IOException {
         Fixture f = fixture();
-        String missing = Path.of("D:/ws").resolve("no-such-dir").toString();
+        // ⑪：改用 TempDir 子路径（不创建），不依赖真实盘符路径；「目录不存在」语义不变
+        String missing = base.resolve("no-such-dir").toString();
 
         CommandHandler.CommandOutcome outcome = handle(f, new SlashCommand.CdCommand(missing));
 

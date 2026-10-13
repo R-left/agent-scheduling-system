@@ -123,8 +123,15 @@ public final class CardActionHandler {
             }
             Throwable error = failure.get();
             if (error != null) {
-                throw error instanceof RuntimeException runtimeError
-                        ? runtimeError : new RuntimeException(error);
+                // ⑯：Error 原样重抛（OOM 等致命错误不得被包装成 RuntimeException 掩盖类型）；
+                // RuntimeException 原样重抛（TS promise reject 的 Error 对位）；仅受检异常包装
+                if (error instanceof RuntimeException runtimeError) {
+                    throw runtimeError;
+                }
+                if (error instanceof Error fatal) {
+                    throw fatal;
+                }
+                throw new RuntimeException(error);
             }
             return result.get();
         };
@@ -177,7 +184,7 @@ public final class CardActionHandler {
         } catch (IOException error) {
             // TS 内存实现 approve 不可能 reject（无 catch 分支）；Java Json 子类声明
             // IOException 须承接——按通用兜底 toast（裁决 1 逐点 catch），无 TS 对应文案
-            return toast(CardActionResponse.ToastType.ERROR, error.getMessage());
+            return toast(CardActionResponse.ToastType.ERROR, errorMessage(error));
         }
         if (approved == null) {
             return toast(CardActionResponse.ToastType.WARNING, "方案状态已经更新。");
@@ -311,25 +318,28 @@ public final class CardActionHandler {
         if (session.status() == SessionStatus.ACTIVE) {
             return toast(CardActionResponse.ToastType.WARNING, "当前会话仍在执行，请稍后重试。");
         }
+        // TS new AbortController() → per-run 令牌（对齐 M2 CancellationToken 先例）；
+        // ⑮：声明在 try 外——续跑启动器移出 try 后仍需引用
+        CancellationToken run = new CancellationToken();
         try {
             runtime.sessions().transition(session.id(), SessionStatus.ACTIVE);
-            // TS new AbortController() → per-run 令牌（对齐 M2 CancellationToken 先例）
-            CancellationToken run = new CancellationToken();
             runtime.activeRuns().put(session.id(),
                     new ActiveRun(run, answered.flow().ownerOpenId()));
             runtime.clarificationFlows().delete(flowToken);
-            // 裁决 4：内存态变更已全部完成，续跑交后台虚拟线程（queueMicrotask 对位）
-            continuationStarter.accept(new ClarificationRunner.ClarificationContinuation(
-                    runtime, botRuntime.bot(), config, answered.flow(), run,
-                    options.defaultProductDeliveryMode()));
-            return new CardActionResponse(
-                    new CardActionResponse.Toast(CardActionResponse.ToastType.SUCCESS,
-                            "答案已收到。"),
-                    ClarificationCards.buildClarificationContinuingCard(answered.flow()));
         } catch (IOException | RuntimeException error) {
             // TS catch (error)：transition 抛错的通用兜底（(error as Error).message）
-            return toast(CardActionResponse.ToastType.ERROR, error.getMessage());
+            return toast(CardActionResponse.ToastType.ERROR, errorMessage(error));
         }
+        // 裁决 4：内存态变更已全部完成，续跑交后台虚拟线程（queueMicrotask 对位）；
+        // ⑮：starter 在 try 之外调用——starter 抛 RuntimeException 不应误报失败 toast
+        //（此时内存态已前进、transition 已生效），生产启动器自身已 catch-all 只记 stderr
+        continuationStarter.accept(new ClarificationRunner.ClarificationContinuation(
+                runtime, botRuntime.bot(), config, answered.flow(), run,
+                options.defaultProductDeliveryMode()));
+        return new CardActionResponse(
+                new CardActionResponse.Toast(CardActionResponse.ToastType.SUCCESS,
+                        "答案已收到。"),
+                ClarificationCards.buildClarificationContinuingCard(answered.flow()));
     }
 
     // ---- resume_cli_session（TS 225-272） ----
@@ -372,7 +382,7 @@ public final class CardActionHandler {
             if (error instanceof InterruptedException) {
                 Thread.currentThread().interrupt(); // 中断路径恢复标记后仍按 TS catch 分支 toast
             }
-            return toast(CardActionResponse.ToastType.ERROR, error.getMessage());
+            return toast(CardActionResponse.ToastType.ERROR, errorMessage(error));
         }
     }
 
@@ -394,5 +404,14 @@ public final class CardActionHandler {
     /** 仅 toast、无卡片更新的响应（TS { toast: {...} }）。 */
     private static CardActionResponse toast(CardActionResponse.ToastType type, String content) {
         return new CardActionResponse(new CardActionResponse.Toast(type, content), null);
+    }
+
+    /**
+     * ⑭：{@code error.getMessage()} 可能为 null（无消息异常，如裸 NPE），toast content
+     * 会变成字面 "null"——null 时回落 {@code error.toString()} 兜底（TS
+     * {@code (error as Error).message} 恒为字符串的等价形态）。
+     */
+    private static String errorMessage(Throwable error) {
+        return error.getMessage() != null ? error.getMessage() : error.toString();
     }
 }

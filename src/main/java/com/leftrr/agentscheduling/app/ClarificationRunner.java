@@ -193,13 +193,17 @@ public final class ClarificationRunner {
                 Thread.currentThread().interrupt();
             }
             boolean aborted = options.run().isCancelled();
+            // ㉑：error.getMessage() 可能为 null（如 NPE），technicalDetail 会缺失——
+            // null 时回落 error.toString()（TS (error as Error).message 恒为字符串的等价兜底）
+            String technicalDetail = aborted ? null
+                    : error.getMessage() != null ? error.getMessage() : error.toString();
             cardUpdater.finish(TaskCards.buildTaskCard(new TaskCards.TaskCardOptions(
                     adapter.displayName(),
                     aborted ? TaskCards.TaskStatus.CANCELLED : TaskCards.TaskStatus.FAILED,
                     aborted ? "需求整理已停止。你可以继续在当前话题里补充。"
                             : "需求整理没有完成。请在当前话题里重试。",
                     progress.snapshot(), null, null,
-                    aborted ? null : error.getMessage(), null)));
+                    technicalDetail, null)));
         } finally {
             // TS 220-226：clearInterval（shutdownNow 统一覆盖 try/catch 各路径）+ activeRuns
             // 身份清理（token 引用相等才删，防误删他人注册）+ 标记会话空闲（声明上抛 IOException）

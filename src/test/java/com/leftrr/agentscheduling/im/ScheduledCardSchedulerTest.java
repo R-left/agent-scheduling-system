@@ -34,33 +34,36 @@ class ScheduledCardSchedulerTest {
         assertTrue(daemon.get(), "调度线程应为 daemon（对齐 TS timer unref 语义）");
     }
 
-    // case02：cancel 后不执行
+    // case02：cancel 后不执行。①：delay 取 2s——schedule→cancel 相邻语句间隙出现
+    // 2s 级停顿（GC/线程饥饿）才可能让任务先跑，消除 150ms 时的理论抢占竞态；
+    // 观察窗口须覆盖整个 delay（2.5s > 2s），cancel 失效时任务必然落窗被断言捕获
     @Test
     void cancelledTaskDoesNotRun() {
         CountDownLatch latch = new CountDownLatch(1);
-        CardScheduler.Cancellable cancellable = scheduler.schedule(latch::countDown, 150);
+        CardScheduler.Cancellable cancellable = scheduler.schedule(latch::countDown, 2_000);
 
         cancellable.cancel();
 
         try {
-            assertFalse(latch.await(400, TimeUnit.MILLISECONDS), "取消后的任务不得执行");
+            assertFalse(latch.await(2_500, TimeUnit.MILLISECONDS), "取消后的任务不得执行");
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new AssertionError(e);
         }
     }
 
-    // case03：Cancellable.cancel 幂等（重复 cancel 不抛、任务仍不执行）
+    // case03：Cancellable.cancel 幂等（重复 cancel 不抛、任务仍不执行）。
+    // 与 case02 同款竞态，同用 2s delay 消除
     @Test
     void cancelIsIdempotent() {
         CountDownLatch latch = new CountDownLatch(1);
-        CardScheduler.Cancellable cancellable = scheduler.schedule(latch::countDown, 150);
+        CardScheduler.Cancellable cancellable = scheduler.schedule(latch::countDown, 2_000);
 
         cancellable.cancel();
         assertDoesNotThrow(cancellable::cancel);
 
         try {
-            assertFalse(latch.await(400, TimeUnit.MILLISECONDS), "取消后的任务不得执行");
+            assertFalse(latch.await(2_500, TimeUnit.MILLISECONDS), "取消后的任务不得执行");
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new AssertionError(e);

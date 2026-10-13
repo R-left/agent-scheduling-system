@@ -40,6 +40,8 @@ public final class ProductSpecDocuments {
             boolean hasTicket = false;
             if (Files.isDirectory(ticketsDir)) {
                 // TS readdir withFileTypes 过滤 isFile() && name.endsWith('.md')
+                // ④ 备案：TS Dirent.isFile() 不跟随符号链接，Files.isRegularFile 跟随——
+                // 条目为指向常规文件的符号链接时 Java 判有工单（极端场景偏宽松）
                 try (Stream<Path> entries = Files.list(ticketsDir)) {
                     hasTicket = entries.anyMatch(entry -> Files.isRegularFile(entry)
                             && entry.getFileName().toString().endsWith(".md"));

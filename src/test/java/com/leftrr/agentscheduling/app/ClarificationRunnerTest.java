@@ -514,18 +514,24 @@ class ClarificationRunnerTest {
 
     @Test
     void 分支C长答案按续传规则分片回复() throws Exception {
-        String answer = "长".repeat(6500);
+        String answer = "长".repeat(13_000);
         RunFixture f = fixture(List.of(), "emit:" + cliOutput(
                 "{\"type\":\"result\",\"answer\":\"" + answer + "\",\"sessionId\":\"cli-c2\"}"));
 
         ClarificationRunner.continueClarificationFlow(options(f), f.session(), f.adapter(), f.heartbeat());
 
         assertTrue(com.leftrr.agentscheduling.im.CardText.answerNeedsContinuation(answer),
-                "6500 字答案应触发续传");
-        assertEquals(
-                com.leftrr.agentscheduling.im.CardText.splitLongText(
-                        com.leftrr.agentscheduling.im.CardText.answerContinuation(answer)),
-                f.bot().replies, "分片应逐字等于 splitLongText(answerContinuation(answer))");
+                "13000 字答案应触发续传");
+        // ⑬ 独立手算期望值（不调用 splitLongText/answerContinuation，避免循环论证）：
+        // 13000 字全无换行 → 预览截断无段落/行可回退、取满 6000 → 续传段为余下 7000 字；
+        // 7000 > 4000 且无换行 → 按上限硬切为 4000 + 3000 两条回复
+        assertEquals(List.of("长".repeat(4_000), "长".repeat(3_000)), f.bot().replies,
+                "分片应等于手算期望：4000 字 + 3000 字两条");
+        // 独立性质断言：每条分片不超续传分片上限，拼接还原续传段全量内容
+        assertTrue(f.bot().replies.stream().allMatch(chunk -> chunk.length() <= 4_000),
+                "每条分片不得超 4000 上限");
+        assertEquals(7_000, f.bot().replies.stream().mapToInt(String::length).sum(),
+                "分片拼接应完整覆盖续传段 7000 字");
         assertEquals("需求澄清已完成，请查看上方结果。", f.bot().mentionText);
     }
 

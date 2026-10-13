@@ -117,9 +117,23 @@ class SessionViewTest {
         assertEquals("", stdout.strip());
     }
 
-    // markSessionIdle：会话不存在（get 返回 null）直接 return，不抛
+    // markSessionIdle：会话不存在（get 返回 null）直接 return，不抛且无输出
+    // （②：补「无 stdout 输出」断言，手法与上方两个用例一致）
     @Test
     void unknownSessionIdIsIgnored() throws IOException {
-        SessionView.markSessionIdle(new SessionManager(), "no-such-session");
+        SessionManager sessions = new SessionManager();
+
+        PrintStream original = System.out;
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        System.setOut(new PrintStream(buffer, true, StandardCharsets.UTF_8));
+        String stdout;
+        try {
+            SessionView.markSessionIdle(sessions, "no-such-session");
+        } finally {
+            System.setOut(original);
+        }
+        stdout = buffer.toString(StandardCharsets.UTF_8);
+
+        assertEquals("", stdout.strip(), "会话不存在时不应有任何输出");
     }
 }
