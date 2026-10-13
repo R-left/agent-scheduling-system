@@ -33,6 +33,10 @@ import java.util.Optional;
  * </pre>
  * argv[1] = cliId（claude|codex，TS process.argv[2]）；argv[2] = workspace（缺省 CWD，TS process.argv[3] ?? cwd）。
  *
+ * <p>中文 Windows 下管道/重定向捕获本探针输出时默认 GBK（Task 6 实证，对齐错题本 M4
+ * 惯例），建议以 {@code MAVEN_OPTS="-Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8"}
+ * 前缀运行，保证管道侧读到 UTF-8。</p>
+ *
  * <p>探针输出即产品（对标 TS console.log/console.error），沿用 System.out/err 而非 SLF4J
  * （M7 裁决 2 的「TS console 对等」口径；SLF4J pattern 会破坏逐字文案）。
  */

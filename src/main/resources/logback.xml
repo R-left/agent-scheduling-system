@@ -86,6 +86,17 @@
     <appender-ref ref="ORCH_STDERR"/>
   </logger>
 
+  <!--
+    Task 6 验收修复轮（F1，必修）：MCP SDK（io.modelcontextprotocol，SLF4J）日志必须静默。
+    AppToolsServer 由 cli 适配层以子进程启动，stdio 即 JSON-RPC 通道——Task 0 引入
+    logback-classic 后，SDK 的 INFO 日志（如 "Client initialize request"）经 root STDOUT
+    appender 写进 stdout，污染协议流，MCP 客户端（claude/codex）握手即失败（Task 6
+    AppToolProbe 零 tool_call 的根因，复现 2 次）。level=off 而非 WARN：stdio 通道对
+    非协议输出零容忍，任何级别的 SDK 日志都不得出现在 stdout。主进程同名 logger 仅
+    在内存流/子进程场景存在，静默无副作用。
+  -->
+  <logger name="io.modelcontextprotocol" level="off"/>
+
   <root level="info">
     <appender-ref ref="STDOUT"/>
   </root>
