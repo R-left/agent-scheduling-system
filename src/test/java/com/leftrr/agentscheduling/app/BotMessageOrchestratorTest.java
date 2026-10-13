@@ -36,6 +36,7 @@ import com.leftrr.agentscheduling.im.CardText;
 import com.leftrr.agentscheduling.im.ClarificationCards;
 import com.leftrr.agentscheduling.im.IncomingDocumentComment;
 import com.leftrr.agentscheduling.im.IncomingMessage;
+import com.leftrr.agentscheduling.im.LarkException;
 import com.leftrr.agentscheduling.im.Mention;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -747,6 +748,39 @@ class BotMessageOrchestratorTest {
         assertTrue(capture.messages().contains("  [下载] image → " + absPath));
         assertEquals(2, fakeBot.downloads.size());
         assertEquals(1, fakeBot.cards.size());
+    }
+
+    @Test
+    void 附件下载_LarkException失败不中断整体() throws IOException, InterruptedException {
+        Path saved = temp.resolve("img_3.png");
+        Files.writeString(saved, "png");
+        fakeBot.downloadHandler = d -> {
+            if (d.fileKey().equals("img_1")) {
+                // 生产实现 OapiLarkApi.getResource 对 REST 失败抛 LarkException
+                // （RuntimeException 子类）——终审 Major-1 的真实失败形态。
+                throw new LarkException("调用飞书接口失败: https://open.feishu.cn"
+                        + "/open-apis/im/v1/messages/om_1/resources/img_1");
+            }
+            return saved.toString();
+        };
+
+        LogbackCapture capture = LogbackCapture.attach(BotMessageOrchestrator.class);
+        try {
+            IncomingMessage msg = new IncomingMessage("om_1", CHAT_ID, "group", "post", "看图",
+                    null, THREAD_ID, "user", "ou_alice", null, List.of(),
+                    "{\"content\":[[{\"tag\":\"img\",\"image_key\":\"img_1\"},"
+                            + "{\"tag\":\"img\",\"image_key\":\"img_3\"}]]}");
+            orchestrator.onMessage(msg, fakeBot);
+        } finally {
+            capture.detach();
+        }
+
+        assertTrue(capture.messages().contains("  [下载失败] img_1: 调用飞书接口失败: "
+                + "https://open.feishu.cn/open-apis/im/v1/messages/om_1/resources/img_1"));
+        String absPath = saved.toAbsolutePath().normalize().toString();
+        assertTrue(capture.messages().contains("  [下载] image → " + absPath));
+        assertEquals(2, fakeBot.downloads.size(), "LarkException 不得中断后续附件下载");
+        assertEquals(1, fakeBot.cards.size(), "LarkException 不得中断整体流程（任务卡照发）");
     }
 
     // ---------- 任务卡回滚 ----------

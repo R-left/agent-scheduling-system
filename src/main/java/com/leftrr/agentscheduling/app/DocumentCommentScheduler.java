@@ -10,7 +10,6 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
-import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -25,7 +24,8 @@ import java.util.concurrent.Executors;
  * workingReaction（失败 warn 不阻塞记 false）→ 按 flow.sessionId 串行
  * （Map&lt;String, CompletableFuture&lt;Void&gt;&gt; + allOf(previous, workingReaction)）→
  * 异步段执行 runProductDocumentComment（try/finally 移除表情）→ 处理失败回写评论
- * （回写再失败兜底 log）→ finally 条件删除（引用相等防误清新任务）。
+ * （回写再失败兜底 log）→ finally 原子条件删除（两参 remove(key, value)，引用相等
+ * 防误清新任务，终审 Major-2）。
  *
  * <p>线程模型（brief 第 3 点申报）：TS 同步函数内纯 Promise 编排，then/catch 回调跑在
  * microtask；Java 对位为<b>同步入口 + 内部 CompletableFuture 编排</b>——mentionedBot 检查、
@@ -94,8 +94,12 @@ public final class DocumentCommentScheduler {
      * 备案（审查 Minor-2）：已完成队列项可能滞留 map（queued 先于 put 完成的良性竞态
      * 窗口，见类 javadoc），有界仅一轮——滞留项行为等价于 Promise.resolve 前序，由
      * 下一轮同 sessionId 任务的 finally 条件删除回收。
+     *
+     * <p>声明为 ConcurrentHashMap 而非 Map 接口（终审 Major-2）：finally 清理依赖两参
+     * {@code remove(key, value)} 的<b>原子</b>条件删除，Map 接口的 default 两参 remove
+     * 是 get+remove 两步非原子实现，原子语义须由实现类型保证。</p>
      */
-    private final Map<String, CompletableFuture<Void>> documentCommentQueues =
+    private final ConcurrentHashMap<String, CompletableFuture<Void>> documentCommentQueues =
             new ConcurrentHashMap<>();
     private final Executor executor;
     private final CommentRunner commentRunner;
@@ -196,9 +200,13 @@ public final class DocumentCommentScheduler {
                     LOGGER.error("[产品评论] 回写失败: {}", replyError.getMessage());
                 }
             }
-            if (documentCommentQueues.get(flow.sessionId()) == queued) {
-                documentCommentQueues.remove(flow.sessionId());
-            }
+            // 终审 Major-2：原 get + 单参 remove 两步非原子且不在 synchronized(this) 内——
+            // 同 sessionId 新任务的 put 若落在 get 与 remove 之间，单参 remove 会无条件
+            // 误删新任务队列头，打穿裁决 10「条件 remove 防误清」。改两参
+            // remove(key, value)：ConcurrentHashMap 原子条件删除，value 匹配以引用相等
+            // 判定（CompletableFuture 未覆写 equals），语义等价于「get == queued 才删」
+            // 且消除竞态窗口，无需锁。
+            documentCommentQueues.remove(flow.sessionId(), queued);
         });
     }
 

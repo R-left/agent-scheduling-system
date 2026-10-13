@@ -16,6 +16,7 @@ import com.leftrr.agentscheduling.im.IncomingDocumentComment;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -26,6 +27,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -439,6 +441,80 @@ class DocumentCommentSchedulerTest {
         release(f.runner(), "cmtB");
         await("cmtC 启动", () -> f.runner().started.equals(List.of("cmtA", "cmtB", "cmtC")));
         await("队列头清空", () -> f.scheduler().queueHead("sess-1") == null);
+    }
+
+    // ---------- 终审 Major-2：清理的 get/remove 非原子 → 两参原子条件删除 ----------
+
+    /**
+     * 终审 Major-2 确定性测试。原实现清理段是 get + 单参 remove 两步且不在
+     * synchronized(this) 内：同 sessionId 新任务的 put 若落在 get 与 remove 之间，
+     * 单参 remove 会无条件删掉新任务队列头，打穿裁决 10「条件 remove 防误清」。
+     * 该窗口纳秒级、物理时序不可控，本测试用受控队列 Map 替身把它<b>确定性展开</b>：
+     * 清理方 remove 到达的瞬间，替身先让「新任务队列头」抢先落位（模拟并发 put 恰在
+     * 清理的读与删之间完成），再执行真删除——断言新任务队列头仍在、且从未走到无条件
+     * 的单参 remove。两参原子条件删除才可能通过；旧的两步实现必删必红。
+     */
+    @Test
+    void 清理窗口内新任务抢先入队_新队列头不被误清() throws Exception {
+        Fixture f = fixture();
+        larkFlow(f, "tokA", "sess-1");
+        f.runner().gates.put("cmtA", new CountDownLatch(1));
+
+        RacingQueueMap controlledMap = new RacingQueueMap();
+        Field queuesField = DocumentCommentScheduler.class
+                .getDeclaredField("documentCommentQueues");
+        queuesField.setAccessible(true);
+        queuesField.set(f.scheduler(), controlledMap);
+
+        f.scheduler().scheduleDocumentComment(f.config(), f.bot(), comment("tokA", "cmtA", "ev-A"));
+        await("cmtA 启动", () -> f.runner().started.equals(List.of("cmtA")));
+
+        CompletableFuture<Void> racingHead = new CompletableFuture<>();
+        controlledMap.armed = true;
+        controlledMap.racingPut = racingHead;
+        release(f.runner(), "cmtA");
+        await("清理已执行", () ->
+                controlledMap.singleArgRemoveCalls.get() + controlledMap.conditionalRemoveCalls.get() >= 1);
+
+        assertEquals(0, controlledMap.singleArgRemoveCalls.get(),
+                "清理不得走无条件单参 remove（终审 Major-2 的缺陷形态）");
+        assertEquals(1, controlledMap.conditionalRemoveCalls.get(),
+                "清理应恰好一次两参原子条件删除");
+        assertTrue(f.scheduler().queueHead("sess-1") == racingHead,
+                "get/remove 间抢先入队的新任务队列头不得被误清");
+    }
+
+    /**
+     * 受控队列 Map 替身：armed 后第一次 remove（清理方）先把「新任务队列头」put 进来
+     * （模拟竞态窗口内新任务的 put 抢先完成），再执行真删除，并按参数形状分别计数。
+     */
+    private static final class RacingQueueMap
+            extends ConcurrentHashMap<String, CompletableFuture<Void>> {
+        volatile boolean armed;
+        volatile CompletableFuture<Void> racingPut;
+        final AtomicInteger singleArgRemoveCalls = new AtomicInteger();
+        final AtomicInteger conditionalRemoveCalls = new AtomicInteger();
+
+        private void injectRacingPutIfArmed(String key) {
+            if (armed) {
+                armed = false;
+                super.put(key, racingPut);
+            }
+        }
+
+        @Override
+        public CompletableFuture<Void> remove(Object key) {
+            singleArgRemoveCalls.incrementAndGet();
+            injectRacingPutIfArmed((String) key);
+            return super.remove(key);
+        }
+
+        @Override
+        public boolean remove(Object key, Object value) {
+            conditionalRemoveCalls.incrementAndGet();
+            injectRacingPutIfArmed((String) key);
+            return super.remove(key, value);
+        }
     }
 
     // ---------- 超 1000 FIFO 淘汰（rememberDocumentCommentEvent 直测） ----------

@@ -229,7 +229,13 @@ public final class BotMessageOrchestrator {
                 String absPath = Path.of(savePath).toAbsolutePath().normalize().toString();
                 downloadedFiles.add(absPath);
                 LOGGER.info("  [下载] {} → {}", res.type().id(), absPath);
-            } catch (IOException e) {
+            } catch (IOException | RuntimeException e) {
+                // 终审 Major-1：生产实现 LarkBot.downloadResource → OapiLarkApi.getResource
+                // 对 REST 失败抛 LarkException（RuntimeException 子类，对齐 TS Error）——
+                // 只接 IOException 会让真实下载失败（token 过期/网络错误/资源过期）击穿
+                // 「单文件失败不中断整体」（TS index.ts L232 下载循环为 catch-all，仅记
+                // 日志）。IOException 保留落盘失败语义，RuntimeException 面覆盖
+                // LarkException 与其他非受检下载失败。
                 LOGGER.error("  [下载失败] {}: {}", res.key(), e.getMessage());
             }
         }
@@ -708,6 +714,8 @@ public final class BotMessageOrchestrator {
             }
         } catch (Throwable error) {
             // 兜底 catch（L763-765）：then/catch/finally 抛出的异常统一落这里
+            // （终审 Minor-4 备案：本代码库取消走 token 而非线程中断，该链路无
+            // InterruptedException 可达源，故不恢复中断状态）
             LOGGER.error("[任务] 回传或收尾失败: {}", error.getMessage());
         }
     }

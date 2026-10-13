@@ -33,6 +33,13 @@ import java.util.Optional;
  * </pre>
  * argv[1] = cliId（claude|codex，TS process.argv[2]）；argv[2] = workspace（缺省 CWD，TS process.argv[3] ?? cwd）。
  *
+ * <p>警示（终审第七节 F2 收口备案）：上面 mvn exec:java 形态下 agent_os MCP 挂载必然
+ * 静默失败——{@code AppTools.claudeAppToolArgs()} 无条件把 {@code java.class.path}
+ * 嵌入子 JVM 的 -cp，而 exec:java 同 JVM 运行时该属性仅 plexus-classworlds jar，子
+ * JVM 启动 AppToolsServer 即 ClassNotFoundException。本探针正是 agent_os 工具链路的
+ * 真实链路验收载体（M5 备案①、Task 6 链路验收），必须用打包 java -cp 形态运行，
+ * 否则静默失败会被误判为模型不调工具（R9）。</p>
+ *
  * <p>中文 Windows 下管道/重定向捕获本探针输出时默认 GBK（Task 6 实证，对齐错题本 M4
  * 惯例），建议以 {@code MAVEN_OPTS="-Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8"}
  * 前缀运行，保证管道侧读到 UTF-8。</p>
