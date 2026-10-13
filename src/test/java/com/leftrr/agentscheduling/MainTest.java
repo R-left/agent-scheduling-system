@@ -18,6 +18,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 
@@ -327,7 +328,10 @@ class MainTest {
         env.put("DEV_APP_SECRET", "secret-dev");
         Main.Bootstrap context =
                 Main.initialize(tempDir.toAbsolutePath().toString(), env);
-        Map<String, FakeBot> started = new HashMap<>();
+        // 终审修复第二轮：startAllBots 每 bot 一个虚拟线程并发调工厂，收集容器须线程
+        // 安全——普通 HashMap 空 map 上两个首 put 并发 resize 可丢条目（scoped 复审
+        // 复现 6/6 失败），改 ConcurrentHashMap 消竞态。
+        Map<String, FakeBot> started = new ConcurrentHashMap<>();
         Main.startAllBots(context, options -> {
             FakeBot fakeBot = new FakeBot("bot", options.appId());
             started.put(options.appId(), fakeBot);
