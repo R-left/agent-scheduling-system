@@ -5,6 +5,9 @@ import com.leftrr.agentscheduling.core.Collaboration;
 import com.leftrr.agentscheduling.im.Bot;
 import com.leftrr.agentscheduling.im.CollaborationCards;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.nio.file.Path;
 import java.util.UUID;
 
@@ -18,6 +21,9 @@ import java.util.UUID;
  * replyCard/replyMention 均不声明受检异常（M4 实际签名），故 dispatch 无 throws。</p>
  */
 public class CollaborationService {
+
+    /** M7 Task 0（裁决 2）：TS console.log 成功日志的 SLF4J 对位（走根 STDOUT appender）。 */
+    private static final Logger LOGGER = LoggerFactory.getLogger(CollaborationService.class);
 
     /**
      * 对齐 TS CollaborationDispatch 接口（collaboration-service.ts:9-24）；
@@ -81,8 +87,10 @@ public class CollaborationService {
                     ? senderRuntime.identity().name()
                     : options.senderConfig().id();
             // TS basename(workspaceDir) → Path.of(...).getFileName()；
-            // ⑳：根路径（如 C:\、/）的 getFileName() 返回 null → .toString() 会 NPE，
-            // 而 TS basename 对根路径不抛（返回盘符/路径本身）——null-safe 回落完整路径字符串
+            // ⑳：根路径（如 C:\、/）的 getFileName() 返回 null → .toString() 会 NPE；
+            // TS basename 对根路径同样不抛，但输出不等价——win32 返回盘符（如 "C:"）、
+            // posix 返回空串，Java 无同构形态可取，null-safe 回落完整 workspaceDir 字符串
+            //（M6 挂账⑳注释措辞修正：原「返回盘符/路径本身」描述不准确，按路线图 M6 收口备案原文改）
             Path workspacePath = Path.of(options.workspaceDir());
             String workspaceName = workspacePath.getFileName() != null
                     ? workspacePath.getFileName().toString() : options.workspaceDir();
@@ -120,10 +128,9 @@ public class CollaborationService {
             runtime.collaborationInbox().consume(collaboration.dispatchId(), collaboration.toBotId());
             throw error;
         }
-        // ㉒：与裁决 8 其余各处口径一致——M7 统一切 SLF4J
-        System.out.println("[协作] task=" + options.taskId()
-                + " " + options.senderConfig().id()
-                + " -> " + options.targetBotId()
-                + " round=" + options.round() + "/" + options.maxRounds());
+        // ㉒：M7 Task 0（裁决 2）切 SLF4J（{} 占位与原拼接等价，文案不变）
+        LOGGER.info("[协作] task={} {} -> {} round={}/{}",
+                options.taskId(), options.senderConfig().id(),
+                options.targetBotId(), options.round(), options.maxRounds());
     }
 }

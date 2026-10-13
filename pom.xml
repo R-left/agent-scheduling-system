@@ -30,6 +30,23 @@
       <artifactId>jackson-annotations</artifactId>
       <version>2.21</version>
     </dependency>
+    <!-- M7 Task 0（裁决 1）：dotenv-java 供 Main 启动对齐 TS dotenv/config 语义（Task 5 接线） -->
+    <dependency>
+      <groupId>io.github.cdimascio</groupId>
+      <artifactId>dotenv-java</artifactId>
+      <version>3.2.0</version>
+    </dependency>
+    <!-- M7 Task 0（裁决 2）：SLF4J 门面 + logback 实现；1.6.5 官方配对 slf4j 2.0.19 -->
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-api</artifactId>
+      <version>2.0.19</version>
+    </dependency>
+    <dependency>
+      <groupId>ch.qos.logback</groupId>
+      <artifactId>logback-classic</artifactId>
+      <version>1.6.5</version>
+    </dependency>
     <dependency>
       <groupId>io.modelcontextprotocol.sdk</groupId>
       <artifactId>mcp</artifactId>

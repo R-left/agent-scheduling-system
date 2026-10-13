@@ -7,13 +7,11 @@ import com.leftrr.agentscheduling.core.SessionManager;
 import com.leftrr.agentscheduling.core.SessionStatus;
 import org.junit.jupiter.api.Test;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.PrintStream;
-import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * M6 Task 2：formatSessionStatus / markSessionIdle 测试。
@@ -70,7 +68,10 @@ class SessionViewTest {
         return SessionView.formatSessionStatus(session, "bot-1").split("\n", -1)[index];
     }
 
-    // markSessionIdle：active 会话 → transition 到 idle + System.out 逐字输出
+    // markSessionIdle：active 会话 → transition 到 idle + info 日志逐字消息体
+    // M7 Task 0（裁决 2）切换申报：System.out 直写改 SLF4J info，消息体文案逐字不变；
+    // logback ConsoleAppender 缓存流引用致 System.setOut 捕获不到，捕获方式改
+    // LogbackCapture（对 formattedMessage 断言，文本与切换前一致）。
     @Test
     void activeSessionTransitionsToIdleAndLogs() throws IOException {
         SessionManager sessions = new SessionManager();
@@ -79,22 +80,18 @@ class SessionViewTest {
                 CliId.CLAUDE, "bot-1", "D:/ws").session();
         sessions.transition(created.id(), SessionStatus.ACTIVE);
 
-        PrintStream original = System.out;
-        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-        System.setOut(new PrintStream(buffer, true, StandardCharsets.UTF_8));
-        String stdout;
+        LogbackCapture capture = LogbackCapture.attach(SessionView.class);
         try {
             SessionView.markSessionIdle(sessions, created.id());
         } finally {
-            System.setOut(original);
+            capture.detach();
         }
-        stdout = buffer.toString(StandardCharsets.UTF_8);
 
         assertEquals(SessionStatus.IDLE, sessions.get(created.id()).status());
-        assertEquals("[会话] id=" + created.id() + " status=idle", stdout.strip());
+        assertEquals("[会话] id=" + created.id() + " status=idle", capture.singleMessage());
     }
 
-    // markSessionIdle：非 active（creating）直接 return，状态不变、无输出
+    // markSessionIdle：非 active（creating）直接 return，状态不变、无日志
     @Test
     void nonActiveSessionIsLeftUnchanged() throws IOException {
         SessionManager sessions = new SessionManager();
@@ -102,38 +99,30 @@ class SessionViewTest {
                 new MessageAddress("om-1", "oc-1", "ot-1", null),
                 CliId.CLAUDE, "bot-1", "D:/ws").session();
 
-        PrintStream original = System.out;
-        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-        System.setOut(new PrintStream(buffer, true, StandardCharsets.UTF_8));
-        String stdout;
+        LogbackCapture capture = LogbackCapture.attach(SessionView.class);
         try {
             SessionView.markSessionIdle(sessions, created.id());
         } finally {
-            System.setOut(original);
+            capture.detach();
         }
-        stdout = buffer.toString(StandardCharsets.UTF_8);
 
         assertEquals(SessionStatus.CREATING, sessions.get(created.id()).status());
-        assertEquals("", stdout.strip());
+        assertTrue(capture.messages().isEmpty(), "非 active 会话不应有任何日志");
     }
 
-    // markSessionIdle：会话不存在（get 返回 null）直接 return，不抛且无输出
-    // （②：补「无 stdout 输出」断言，手法与上方两个用例一致）
+    // markSessionIdle：会话不存在（get 返回 null）直接 return，不抛且无日志
+    // （②：补「无日志输出」断言，手法与上方两个用例一致）
     @Test
     void unknownSessionIdIsIgnored() throws IOException {
         SessionManager sessions = new SessionManager();
 
-        PrintStream original = System.out;
-        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-        System.setOut(new PrintStream(buffer, true, StandardCharsets.UTF_8));
-        String stdout;
+        LogbackCapture capture = LogbackCapture.attach(SessionView.class);
         try {
             SessionView.markSessionIdle(sessions, "no-such-session");
         } finally {
-            System.setOut(original);
+            capture.detach();
         }
-        stdout = buffer.toString(StandardCharsets.UTF_8);
 
-        assertEquals("", stdout.strip(), "会话不存在时不应有任何输出");
+        assertTrue(capture.messages().isEmpty(), "会话不存在时不应有任何日志");
     }
 }

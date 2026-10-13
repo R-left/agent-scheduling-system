@@ -6,6 +6,9 @@ import com.leftrr.agentscheduling.core.Session;
 import com.leftrr.agentscheduling.core.SessionManager;
 import com.leftrr.agentscheduling.core.SessionStatus;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.IOException;
 import java.util.Map;
 
@@ -13,6 +16,9 @@ import java.util.Map;
  * /status 文本格式化 + 执行完成后标记会话空闲。对齐 TS 版 src/app/session-view.ts（33 行）。
  */
 public final class SessionView {
+
+    /** M7 Task 0（裁决 2）：TS console.log 的 SLF4J 对位（走根 STDOUT appender）。 */
+    private static final Logger LOGGER = LoggerFactory.getLogger(SessionView.class);
 
     /** 对齐 TS STATUS_LABELS：四状态中文标签逐字。 */
     private static final Map<SessionStatus, String> STATUS_LABELS = Map.of(
@@ -46,7 +52,7 @@ public final class SessionView {
      * TS markSessionIdle（session-view.ts:25-32）：仅 active 会话切换 idle。
      * TS→Java：TS 的 `sessions.get(sessionId)?.status !== "active"` 拆为
      * 「get 返回 null 或状态非 ACTIVE 都直接 return」；transition 的受检 IOException
-     * 显式上抛（M7 兜底 catch 依赖此签名，调研 §1.4）；日志用 System.out（M7 切 SLF4J）。
+     * 显式上抛（M7 兜底 catch 依赖此签名，调研 §1.4）；日志 M7 Task 0（裁决 2）切 SLF4J info。
      */
     public static void markSessionIdle(SessionManager sessions, String sessionId)
             throws IOException {
@@ -55,6 +61,6 @@ public final class SessionView {
             return;
         }
         sessions.transition(sessionId, SessionStatus.IDLE);
-        System.out.println("[会话] id=" + sessionId + " status=idle");
+        LOGGER.info("[会话] id={} status=idle", sessionId);
     }
 }

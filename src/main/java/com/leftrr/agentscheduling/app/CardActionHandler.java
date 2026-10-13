@@ -24,6 +24,9 @@ import com.leftrr.agentscheduling.im.ClarificationCards;
 import com.leftrr.agentscheduling.im.ProductSpecCards;
 import com.leftrr.agentscheduling.im.SessionCards;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
@@ -54,11 +57,15 @@ import java.util.function.Consumer;
  * <li>受检异常逐点 catch → toast（TS 各 catch 分支文案照搬）；TS 无 catch 的
  *     {@code productSpecFlows.approve}（内存实现不会失败）在 Java 因 Json 子类声明
  *     IOException 也须承接——按通用兜底 toast error(message) 备案。</li>
- * <li>本文件 TS 无 console 输出（无日志需求）；续跑 catch-all 的 stderr 为 TS console.error
- *     的对位（M7 统一切 SLF4J）。</li>
+ * <li>本文件 TS 无 console 输出（无日志需求）；续跑 catch-all 的 error 为 TS console.error
+ *     的对位——M7 Task 0（裁决 2）已切 SLF4J error 日志（logback STDERR appender，
+ *     文案逐字不变）。</li>
  * </ul>
  */
 public final class CardActionHandler {
+
+    /** M7 Task 0（裁决 2）：TS console.error 的 SLF4J 对位；logback.xml 将本 logger 定向 STDERR。 */
+    private static final Logger LOGGER = LoggerFactory.getLogger(CardActionHandler.class);
 
     /** 对齐 TS options 对象（card-action-handler.ts:22-27）。 */
     public record CardActionHandlerOptions(
@@ -71,7 +78,7 @@ public final class CardActionHandler {
 
     /**
      * 生产续跑启动器（裁决 4）：后台虚拟线程执行 {@code continueClarificationFlow}，
-     * 异常 catch-all 记 stderr（对齐 TS queueMicrotask + void promise.catch(console.error)）。
+     * 异常 catch-all 记 SLF4J error 日志（对齐 TS queueMicrotask + void promise.catch(console.error)）。
      */
     private static final Consumer<ClarificationRunner.ClarificationContinuation>
             PRODUCTION_CONTINUATION_STARTER = continuation -> Thread.ofVirtual().start(() -> {
@@ -79,9 +86,10 @@ public final class CardActionHandler {
                     ClarificationRunner.continueClarificationFlow(continuation);
                 } catch (InterruptedException error) {
                     Thread.currentThread().interrupt();
-                    System.err.println("[澄清] 继续执行失败: " + error.getMessage()); // M7 统一切 SLF4J
+                    // M7 Task 0（裁决 2）：System.err → SLF4J，{} 占位与原拼接等价，文案不变
+                    LOGGER.error("[澄清] 继续执行失败: {}", error.getMessage());
                 } catch (Exception error) {
-                    System.err.println("[澄清] 继续执行失败: " + error.getMessage()); // M7 统一切 SLF4J
+                    LOGGER.error("[澄清] 继续执行失败: {}", error.getMessage());
                 }
             });
 
@@ -332,7 +340,7 @@ public final class CardActionHandler {
         }
         // 裁决 4：内存态变更已全部完成，续跑交后台虚拟线程（queueMicrotask 对位）；
         // ⑮：starter 在 try 之外调用——starter 抛 RuntimeException 不应误报失败 toast
-        //（此时内存态已前进、transition 已生效），生产启动器自身已 catch-all 只记 stderr
+        //（此时内存态已前进、transition 已生效），生产启动器自身已 catch-all 只记 error 日志
         continuationStarter.accept(new ClarificationRunner.ClarificationContinuation(
                 runtime, botRuntime.bot(), config, answered.flow(), run,
                 options.defaultProductDeliveryMode()));

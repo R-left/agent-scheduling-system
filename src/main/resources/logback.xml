@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  M7 Task 0（裁决 2）基础配置。pattern 实际形态申报：
+    %d{yyyy-MM-dd HH:mm:ss.SSS} [%level] %msg%n
+  输出观感：`2026-10-13 10:00:00.000 [INFO] <消息>`——对齐计划钦点的
+  「[时间] 级别 msg」结构；消息体与 TS console 文案逐字（R12 备案）。
+
+  出口分流：TS 侧 console.error 对位的锚点（CardActionHandler 澄清续跑失败、
+  Notifications 通知失败）落在 STDERR appender（additivity=false 防重复）；
+  其余（含 CollaborationService 成功日志、SessionView markSessionIdle）走根
+  STDOUT appender——out/err 语义与 TS 对齐。未切锚点的 System.out/err 直写
+  不经此处，配置不改变其行为。
+-->
+<configuration>
+  <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%level] %msg%n</pattern>
+    </encoder>
+  </appender>
+  <appender name="STDERR" class="ch.qos.logback.core.ConsoleAppender">
+    <target>System.err</target>
+    <encoder>
+      <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%level] %msg%n</pattern>
+    </encoder>
+  </appender>
+
+  <logger name="com.leftrr.agentscheduling.app.CardActionHandler" level="error" additivity="false">
+    <appender-ref ref="STDERR"/>
+  </logger>
+  <logger name="com.leftrr.agentscheduling.app.Notifications" level="error" additivity="false">
+    <appender-ref ref="STDERR"/>
+  </logger>
+
+  <root level="info">
+    <appender-ref ref="STDOUT"/>
+  </root>
+</configuration>

@@ -11,10 +11,7 @@ import com.leftrr.agentscheduling.im.BotIdentity;
 import com.leftrr.agentscheduling.im.IncomingDocumentComment;
 import org.junit.jupiter.api.Test;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.PrintStream;
-import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -164,19 +161,6 @@ class CollaborationServiceTest {
         var field = Collaboration.CollaborationInbox.class.getDeclaredField("messages");
         field.setAccessible(true);
         return (Map<String, Collaboration.CollaborationMessage>) field.get(inbox);
-    }
-
-    /** 捕获 System.out 输出并返回；测试结束前必须在 finally 里恢复原始流。 */
-    private static String captureStdout(Runnable action) {
-        PrintStream original = System.out;
-        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-        System.setOut(new PrintStream(buffer, true, StandardCharsets.UTF_8));
-        try {
-            action.run();
-        } finally {
-            System.setOut(original);
-        }
-        return buffer.toString(StandardCharsets.UTF_8);
     }
 
     // ---------- target 缺失：throw 逐字，未落账未发卡 ----------
@@ -342,14 +326,21 @@ class CollaborationServiceTest {
 
     // ---------- 成功日志格式逐字 ----------
 
+    // M7 Task 0（裁决 2）切换申报：System.out 直写改 SLF4J info（{} 占位），消息体
+    // 文案逐字不变；logback ConsoleAppender 缓存流引用致 System.setOut 捕获不到，
+    // 捕获方式改 LogbackCapture（对 formattedMessage 断言，文本与切换前一致）。
     @Test
     void 成功日志格式逐字() {
         Fixture f = fixture();
         CollaborationService service = new CollaborationService(f.runtime);
 
-        String stdout = captureStdout(() ->
-                service.dispatch(dispatchOptions(config("leader"), f.leaderBot, 1)));
+        LogbackCapture capture = LogbackCapture.attach(CollaborationService.class);
+        try {
+            service.dispatch(dispatchOptions(config("leader"), f.leaderBot, 1));
+        } finally {
+            capture.detach();
+        }
 
-        assertEquals("[协作] task=task-001 leader -> worker round=1/3", stdout.strip());
+        assertEquals("[协作] task=task-001 leader -> worker round=1/3", capture.singleMessage());
     }
 }

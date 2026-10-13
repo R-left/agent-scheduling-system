@@ -28,9 +28,7 @@ import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -693,24 +691,26 @@ class CardActionHandlerTest {
         ObjectNode value = answerValue(flow.token(), "q2");
         value.put("optionId", "p");
 
-        PrintStream originalErr = System.err;
-        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-        System.setErr(new PrintStream(buffer, true, StandardCharsets.UTF_8));
+        // M7 Task 0（裁决 2）切换申报：续跑失败由 System.err 直写改 SLF4J error（{} 占位），
+        // 消息体文案逐字不变；logback ConsoleAppender 缓存流引用致 System.setErr 捕获不到，
+        // 捕获方式改 LogbackCapture（对 formattedMessage 断言，文本与切换前一致）。
+        LogbackCapture capture = LogbackCapture.attach(CardActionHandler.class);
         try {
-            // 生产默认启动器：监听器正常返回，续跑异常只记 stderr 不外抛
+            // 生产默认启动器：监听器正常返回，续跑异常只记 error 日志不外抛
             CardActionResponse response = handle(f, action("ou_owner", value));
             assertToast(response, CardActionResponse.ToastType.SUCCESS, "答案已收到。");
-            String text = "";
+            boolean found = false;
             Instant deadline = Instant.now().plusSeconds(5);
-            while (!(text = buffer.toString(StandardCharsets.UTF_8))
-                    .contains("飞书没有返回需求整理进度卡片的 message_id")
+            while (!(found = capture.messages().stream()
+                    .anyMatch(m -> m.contains("飞书没有返回需求整理进度卡片的 message_id")))
                     && Instant.now().isBefore(deadline)) {
                 Thread.sleep(50);
             }
-            assertTrue(text.contains("[澄清] 继续执行失败: 飞书没有返回需求整理进度卡片的 message_id"),
-                    "虚拟线程续跑异常应被吞并记录，实际 stderr: " + text);
+            assertTrue(capture.messages().contains(
+                            "[澄清] 继续执行失败: 飞书没有返回需求整理进度卡片的 message_id"),
+                    "虚拟线程续跑异常应被吞并记录，实际日志: " + capture.messages());
         } finally {
-            System.setErr(originalErr);
+            capture.detach();
         }
     }
 
