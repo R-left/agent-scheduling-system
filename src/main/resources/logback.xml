@@ -25,9 +25,11 @@
   走 STDERR。
 
   M-2 备案（有意识选择，不改）：TS console.warn 在 Node 实际落 stderr，但 [Skill]
-  找不到 Skill（Main）、[产品评论] 添加/移除处理中表情失败（scheduler）三条 warn
-  按「失败不阻塞、仅提示」的提示性定位进 STDOUT——与 console.error 语义不同级，
-  不随 error 分流；如需严格对齐再议。
+  找不到 Skill（Main）、[澄清] 旧卡片更新失败（orchestrator）、[产品评论] 添加/移除
+  处理中表情失败（scheduler）四条 warn 按「失败不阻塞、仅提示」的提示性定位进
+  STDOUT——与 console.error 语义不同级，不随 error 分流；如需严格对齐再议。
+  （Task 6 验收顺手修 N-1：原备案「三条 warn」漏计 orchestrator 的 [澄清] 一条，
+  现按 Main/Orchestrator/Scheduler 三文件 warn 全量清点补齐为四条。）
 -->
 <configuration>
   <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
