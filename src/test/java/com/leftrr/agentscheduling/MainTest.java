@@ -2,6 +2,8 @@ package com.leftrr.agentscheduling;
 
 import com.leftrr.agentscheduling.cli.CliAdapter;
 import com.leftrr.agentscheduling.cli.CliAdapterRegistry;
+import com.leftrr.agentscheduling.cli.CliId;
+import com.leftrr.agentscheduling.core.MessageAddress;
 import com.leftrr.agentscheduling.im.BotOptions;
 import com.leftrr.agentscheduling.im.IncomingMessage;
 import org.junit.jupiter.api.Test;
@@ -250,12 +252,19 @@ class MainTest {
             return fakeBot;
         });
         // /claude 空 prompt → 走 orchestrator 前半的引导回复路径（不触达 CLI 执行）
+        //（注：该路径在会话 resolve 之前 return，不产生持久化——落盘隔离用下方直 resolve 验证）
         IncomingMessage msg = new IncomingMessage("m1", "chat1", "group", "text",
                 "/claude", null, null, "user", "ou_user", null, List.of(), "/claude");
         recordedOptions.get(0).onMessage().onMessage(msg, fakeBot);
         awaitTrue(() -> !fakeBot.replies.isEmpty(), "虚拟线程应完成编排回复");
         assertEquals("请在 /claude 后面写下任务，例如：/claude 检查项目状态",
                 fakeBot.replies.get(0));
+        // 修复轮 I-1：会话持久化落 baseDirectory（tempDir）下的 data/，与仓库根隔离
+        context.runtime().sessions().resolve(
+                new MessageAddress("m2", "chat1", "t2", "r2"),
+                CliId.CLAUDE, "leader", tempDir.toString());
+        assertTrue(Files.exists(tempDir.resolve("data").resolve("sessions.json")),
+                "sessions.json 应落在注入的 baseDirectory 下");
     }
 
     @Test

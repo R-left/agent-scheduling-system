@@ -30,9 +30,17 @@ public final class ExactLevelFilter extends AbstractMatcherFilter<ILoggingEvent>
 
     private Level level;
 
-    /** joran 注入：等级名（ERROR/WARN/INFO/…），经 Level.toLevel 解析。 */
+    /**
+     * joran 注入：等级名（ERROR/WARN/INFO/…）。未知等级名拒绝解析为默认值
+     * （修复轮 M-3：Level.toLevel(String) 对拼错名字静默回退 DEBUG，改为显式
+     * addError 并保持 level 为 null → start() 拒绝启动 → decide 恒 NEUTRAL，
+     * 配置错误在 logback 内部状态可见而非静默改变路由行为）。
+     */
     public void setLevel(String levelName) {
-        this.level = Level.toLevel(levelName);
+        this.level = Level.toLevel(levelName, null);
+        if (this.level == null) {
+            addError("未知等级名: " + levelName + "，过滤器拒绝启动");
+        }
     }
 
     @Override

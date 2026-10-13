@@ -13,11 +13,21 @@
 
   M7 Task 5（累积裁决 b，Task 2 审查 concern ⑦）：BotMessageOrchestrator 与
   DocumentCommentScheduler 的 TS console.error（[下载失败]/[卡片] 无 message_id/
-  [任务] 回传或收尾失败/[CLI] 执行失败/[会话] 保存空闲状态失败/[产品评论] 处理失败
-  与回写失败等）定向 STDERR，console.log/warn 保持 STDOUT——两类的日志以 info 为主、
-  error 为辅，logger 级 appender 会把 info/warn 一并吞进同一出口，故按 appender 挂
+  [CLI] 执行失败/[会话] 保存空闲状态失败/[产品评论] 处理失败与回写失败等）定向
+  STDERR，console.log/warn 保持 STDOUT——两类的日志以 info 为主、error 为辅，
+  logger 级 appender 会把 info/warn 一并吞进同一出口，故按 appender 挂
   ExactLevelFilter（logging/ExactLevelFilter.java，方案评估见其 javadoc）：每个
   logger 挂 STDOUT 版（error 剔除）+ STDERR 版（仅 error），additivity=false 防重复。
+
+  M7 Task 5 修复轮（M-1）：`[任务] 回传或收尾失败` 的实际调用点是 Main 的
+  onMessage catch-all 兜底（非 orchestrator 内部），Main logger 同样按双 appender
+  方案接线——Main 的启动 info 日志与 [Skill] warn 保持 STDOUT，catch-all error
+  走 STDERR。
+
+  M-2 备案（有意识选择，不改）：TS console.warn 在 Node 实际落 stderr，但 [Skill]
+  找不到 Skill（Main）、[产品评论] 添加/移除处理中表情失败（scheduler）三条 warn
+  按「失败不阻塞、仅提示」的提示性定位进 STDOUT——与 console.error 语义不同级，
+  不随 error 分流；如需严格对齐再议。
 -->
 <configuration>
   <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
@@ -66,6 +76,10 @@
     <appender-ref ref="ORCH_STDERR"/>
   </logger>
   <logger name="com.leftrr.agentscheduling.app.DocumentCommentScheduler" additivity="false">
+    <appender-ref ref="ORCH_STDOUT"/>
+    <appender-ref ref="ORCH_STDERR"/>
+  </logger>
+  <logger name="com.leftrr.agentscheduling.Main" additivity="false">
     <appender-ref ref="ORCH_STDOUT"/>
     <appender-ref ref="ORCH_STDERR"/>
   </logger>

@@ -79,17 +79,24 @@ public final class Main {
     /**
      * TS index.ts L68-128 初始化序列逐语句。baseDirectory 对齐 TS 各相对路径的
      * process.cwd() 基准（参数化仅为测试注入；生产传 CWD，见类 javadoc R8）。
+     * baseDirectory 为 null 时回落 CWD（对齐 TS 默认参数 process.cwd()）——
+     * data/ 两持久化路径同样挂 baseDirectory（修复轮 I-1：与 bots.json 一致，
+     * 测试传 tempDir 即全隔离；生产 baseDirectory=CWD 时与 TS join('data',…)
+     * 相对 CWD 语义不变）。
      */
     static Bootstrap initialize(String baseDirectory, Map<String, String> env) throws IOException {
+        String base = baseDirectory != null
+                ? baseDirectory
+                : Path.of("").toAbsolutePath().toString();
         // L68-70 botConfigPath = resolve(process.env.BOTS_CONFIG ?? join('config','bots.json'))
         //（?? 只跳过 null：空串也覆盖——Path.resolve('') → cwd，Java Path.resolve('') 同构）
         String configuredPath = env.get("BOTS_CONFIG");
         String botConfigPath = resolveAgainstBase(
                 configuredPath != null ? configuredPath : Path.of("config", "bots.json").toString(),
-                baseDirectory);
+                base);
         // L71-73（Java loadAgentOsConfig 多 env/baseDirectory 两参，研究 §3.1）
         BotRegistry.AgentOsConfig agentOsConfig =
-                BotRegistry.loadAgentOsConfig(botConfigPath, env, baseDirectory);
+                BotRegistry.loadAgentOsConfig(botConfigPath, env, base);
         List<BotRegistry.BotConfig> botConfigs = agentOsConfig.bots();
         // Task 3 审查 Minor ㊃ 装配义务：与 agentOsConfig 同一 teamLeaderId 构造，
         // orchestrator 的 leader 判定（runtime.teamRegistry().leaderBotId()）才与
@@ -111,9 +118,10 @@ public final class Main {
             defaultWorkspaces.put(config.id(), config.workspaceDir());
         }
         // L85-91 JsonSessionStore 三参构造（旧格式迁移 botId 取第一个 bot、默认工作区表）；
-        // bots 校验保证至少一个（bots 至少需要配置一个），botConfigs[0]?.id 的空表分支不可达
+        // bots 校验保证至少一个（bots 至少需要配置一个），botConfigs[0]?.id 的空表分支不可达。
+        // data 路径挂 baseDirectory（修复轮 I-1，与 bots.json 同法；生产=CWD 语义不变）
         SessionManager sessions = SessionManager.open(new JsonSessionStore(
-                Path.of("data", "sessions.json").toString(),
+                resolveAgainstBase(Path.of("data", "sessions.json").toString(), base),
                 botConfigs.get(0).id(),
                 defaultWorkspaces));
         // L92-103 内存态容器：并发形态按 AppRuntime 装配口径（M6 裁决 2）落 CHM，
@@ -127,8 +135,8 @@ public final class Main {
                 ConcurrentHashMap.newKeySet(),
                 new Collaboration.CollaborationInbox(),
                 new Clarification.ClarificationFlowStore(),
-                new JsonProductSpecFlowStore(
-                        Path.of("data", "product-spec-flows.json").toString()));
+                new JsonProductSpecFlowStore(resolveAgainstBase(
+                        Path.of("data", "product-spec-flows.json").toString(), base)));
         // L115
         CollaborationService collaborationService = new CollaborationService(runtime);
         // Task 4 审查 Minor-5 装配义务：全局单实例——TS 防重集与串行队列是模块级状态

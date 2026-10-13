@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 /** ExactLevelFilter 决策矩阵（M7 Task 5 累积裁决 b 的 logback.xml 组装依赖）。 */
 class ExactLevelFilterTest {
@@ -61,5 +62,20 @@ class ExactLevelFilterTest {
         noLevel.setOnMismatch(FilterReply.DENY);
         noLevel.start();
         assertEquals(FilterReply.NEUTRAL, noLevel.decide(event(Level.ERROR)));
+    }
+
+    @Test
+    void 拼错等级名_拒绝启动而非静默回退DEBUG() {
+        // 修复轮 M-3：未知等级名 → level 保持 null → start() 拒绝 → decide 恒 NEUTRAL，
+        // 配置错误经 logback 内部状态可见，不静默改变路由行为
+        ExactLevelFilter typo = new ExactLevelFilter();
+        LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
+        typo.setContext(context);
+        typo.setLevel("ERORR");
+        typo.setOnMatch(FilterReply.ACCEPT);
+        typo.setOnMismatch(FilterReply.DENY);
+        typo.start();
+        assertFalse(typo.isStarted(), "拼错等级名应拒绝启动");
+        assertEquals(FilterReply.NEUTRAL, typo.decide(event(Level.ERROR)));
     }
 }
