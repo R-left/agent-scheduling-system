@@ -1,8 +1,9 @@
 package com.leftrr.agentscheduling.core;
 
+import com.leftrr.agentscheduling.dto.core.CancelMode;
+
 /**
- * 一次执行中的任务。对应 TS 版 src/core/task-abort.ts 的 ActiveRun。
- * TS 版会在 abort 前原地改写 cancelMode，故此处为可变类而非 record。
+ * 一次执行中的任务。abort 前会原地改写 cancelMode，故为可变类而非 record。
  */
 public final class ActiveRun {
     private final CancellationToken token;
@@ -23,8 +24,8 @@ public final class ActiveRun {
     }
 
     /**
-     * 警告：cancelMode 在 {@code token.cancel()} 触发的全部取消监听器执行完毕之后才可见；
-     * 取消回调（onCancel）内读取本方法恒为 null，禁止在回调中依赖它。
+     * 坑：cancelMode 要等 token.cancel() 触发的全部回调跑完才可见，
+     * onCancel 里读这里恒为 null，回调内别依赖它。
      */
     public CancelMode cancelMode() {
         return cancelMode;

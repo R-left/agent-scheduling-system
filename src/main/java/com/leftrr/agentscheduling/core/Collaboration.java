@@ -1,8 +1,8 @@
 package com.leftrr.agentscheduling.core;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.leftrr.agentscheduling.cli.CliRunResult;
-import com.leftrr.agentscheduling.cli.JsText;
+import com.leftrr.agentscheduling.dto.cli.CliRunResult;
+import com.leftrr.agentscheduling.util.StringUtil;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -11,8 +11,8 @@ import java.util.Map;
 import java.util.regex.Pattern;
 
 /**
- * bot 间协作（dispatch_task）。对应 TS 版 src/core/collaboration.ts。
- * zod schema 用 JsonNode 手工校验表达（设计裁决 1）：safeParse → 返回 null 不抛。
+ * bot 间协作（dispatch_task）。
+ * 请求用 JsonNode 手工校验：非法返回 null 不抛。
  */
 public final class Collaboration {
     public static final String DISPATCH_TASK_TOOL_NAME = "dispatch_task";
@@ -20,14 +20,14 @@ public final class Collaboration {
 
     private Collaboration() {}
 
-    /** 对齐 DispatchTaskRequest（z.infer）；expectedOutput null 表示可选缺省。 */
+    /** 协作派发请求；expectedOutput null 表示可选缺省。 */
     public record DispatchTaskRequest(
             String targetBotId,
             String objective,
             String instruction,
             String expectedOutput) {}
 
-    /** 对齐 CollaborationMessage 接口；ownerUnionId/expectedOutput null 表示 undefined。 */
+    /** 协作消息；ownerUnionId/expectedOutput null 表示缺省。 */
     public record CollaborationMessage(
             String dispatchId,
             String taskId,
@@ -43,7 +43,7 @@ public final class Collaboration {
             int maxRounds,
             String workspaceDir) {}
 
-    /** 对齐 CollaborationOrigin 接口。 */
+    /** 协作来源信息（taskId / 发起 bot / 汇报 bot / 轮次）。 */
     public record CollaborationOrigin(
             String taskId,
             String fromBotId,
@@ -51,7 +51,7 @@ public final class Collaboration {
             int round,
             int maxRounds) {}
 
-    /** 对齐 DispatchTaskRequestSchema.safeParse：非法返回 null。 */
+    /** 解析 dispatch_task 请求入参：非法返回 null。 */
     public static DispatchTaskRequest parseDispatchTaskRequest(JsonNode input) {
         if (input == null || !input.isObject()) {
             return null;
@@ -71,7 +71,7 @@ public final class Collaboration {
         }
         String expectedOutput = null;
         JsonNode expectedNode = input.get("expectedOutput");
-        if (expectedNode != null) { // zod .optional() 拒绝显式 null：键存在即必须合法
+        if (expectedNode != null) { // 可选字段拒绝显式 null：键存在即必须合法
             expectedOutput = trimmedText(expectedNode);
             if (expectedOutput == null || expectedOutput.isEmpty() || expectedOutput.length() > 500) {
                 return null;
@@ -80,7 +80,7 @@ public final class Collaboration {
         return new DispatchTaskRequest(targetNode.asText(), objective, instruction, expectedOutput);
     }
 
-    /** 对齐 findDispatchTaskRequest()：从后向前、safeParse 失败继续向前、命中即返。 */
+    /** 从后向前扫描工具调用：解析失败继续向前、命中即返。 */
     public static DispatchTaskRequest findDispatchTaskRequest(List<CliRunResult.ToolCall> toolCalls) {
         if (toolCalls == null) {
             return null;
@@ -119,24 +119,19 @@ public final class Collaboration {
         return message.taskId() + ":" + message.round() + ":" + message.toBotId();
     }
 
-    /** z.string().trim()：JS trim 语义 + 非文本判失败。 */
+    /** 按完整 Unicode 空白全集 trim；非文本节点判失败。 */
     private static String trimmedText(JsonNode node) {
         if (node == null || !node.isTextual()) {
             return null;
         }
-        return JsText.jsTrim(node.asText());
+        return StringUtil.trim(node.asText());
     }
 
     /**
-     * 内存收件箱（TS CollaborationInbox；重启即失，roadmap「运行时状态」口径）。
-     *
-     * <p>并发形态（M7 Task 5 累积裁决 a，Task 2 审查 Minor ㉇）：TS 单事件循环下
-     * register（dispatch 线程）与 consume（消息线程）天然串行；Java 两侧在不同虚拟线程，
-     * 裸 LinkedHashMap 跨线程竞争。register/consume 均收 {@code synchronized}——consume 的
-     * get+check+remove 是复合操作，ConcurrentHashMap 只能保证单键原子性、无法表达
-     * 「校验通过即取走」的整段语义（两个并发 consume 可能都读到非 null 而双取走），
-     * 方法级互斥才与 TS 同同步段原子性逐点对齐。方法体内无阻塞调用，锁竞争面仅
-     * 协作派发/回传路径，无死锁风险。LinkedHashMap 保持原字段不动。</p>
+     * 内存收件箱（重启即失）。
+     * register 与 consume 在不同虚拟线程上跑，而 consume 是 get+check+remove 复合操作，
+     * 换 ConcurrentHashMap 也只保单键原子，两个并发 consume 会都读到非空双取走，
+     * 所以方法级 synchronized 整段互斥。锁内无阻塞调用，无死锁风险。
      */
     public static final class CollaborationInbox {
         private final Map<String, CollaborationMessage> messages = new LinkedHashMap<>();
@@ -145,7 +140,7 @@ public final class Collaboration {
             messages.put(message.dispatchId(), message);
         }
 
-        /** dispatchId 不存在或 toBotId 不匹配返回 null 且不删除（对齐 TS）。 */
+        /** dispatchId 不存在或 toBotId 不匹配返回 null 且不删除。 */
         public synchronized CollaborationMessage consume(String dispatchId, String toBotId) {
             CollaborationMessage message = messages.get(dispatchId);
             if (message == null || !message.toBotId().equals(toBotId)) {

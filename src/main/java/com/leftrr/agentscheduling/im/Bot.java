@@ -1,57 +1,53 @@
 package com.leftrr.agentscheduling.im;
 
 import com.fasterxml.jackson.databind.JsonNode;
-
+import com.leftrr.agentscheduling.dto.im.BotIdentity;
+import com.leftrr.agentscheduling.dto.im.IncomingDocumentComment;
 import java.io.IOException;
 
 /**
- * 业务侧 Bot 门面。对齐 TS 版 src/im/lark.ts:91-127 的 Bot 接口（Java 面，
- * 全部同步返回；设计裁决 9b：不含 TS 的 client 属性）。
- *
- * TS 可选参数（replyInThread 默认 false）→ Java 两参默认重载，委托全参方法。
+ * 业务侧 Bot 门面，全部同步返回。
+ * replyInThread 提供默认 false 的两参重载，委托全参方法。
  */
 public interface Bot {
 
-    /** TS fetchBotIdentity（lark.ts:151-159）。 */
+    /** 获取 bot 身份（open_id 与显示名）。 */
     BotIdentity getIdentity();
 
-    /** TS reply（lark.ts:242-254），返回 data.message_id，缺失 → null。 */
+    /** 回复文本消息，返回 data.message_id，缺失 → null。 */
     String reply(String messageId, String text, boolean replyInThread);
 
     default String reply(String messageId, String text) {
         return reply(messageId, text, false);
     }
 
-    /** TS replyCard（lark.ts:256-266），card 为卡片 JSON（内部序列化）。 */
+    /** 回复卡片消息，card 为卡片 JSON（内部序列化）。 */
     String replyCard(String messageId, JsonNode card, boolean replyInThread);
 
     default String replyCard(String messageId, JsonNode card) {
         return replyCard(messageId, card, false);
     }
 
-    /** TS replyMention（lark.ts:268-278），content 由 buildMentionPostContent 构造。 */
+    /** 回复 @提及消息，content 由 buildMentionPostContent 构造。 */
     String replyMention(String messageId, BotIdentity target, String text, boolean replyInThread);
 
     default String replyMention(String messageId, BotIdentity target, String text) {
         return replyMention(messageId, target, text, false);
     }
 
-    /** TS updateCard（lark.ts:280-285）。 */
+    /** 更新消息卡片。 */
     void updateCard(String messageId, JsonNode card);
 
-    /** TS subscribeToDocumentComments（lark.ts:287-294）。 */
+    /** 订阅文档评论事件。 */
     void subscribeToDocumentComments();
 
-    /** TS replyToDocumentComment（lark.ts:296-326）。 */
+    /** 回复文档评论。 */
     void replyToDocumentComment(IncomingDocumentComment comment, String text);
 
-    /** TS setDocumentCommentWorking（lark.ts:328-343）。 */
+    /** 设置/取消文档评论的「处理中」表情回应。 */
     void setDocumentCommentWorking(IncomingDocumentComment comment, boolean active);
 
-    /**
-     * TS downloadResource（lark.ts:345-356），返回落盘路径字符串。
-     * TS Promise reject 的 IO 失败 → Java 受检 IOException。
-     */
+    /** 下载消息资源到 saveDir，返回落盘路径字符串。 */
     String downloadResource(String messageId, String fileKey, String type,
                             String saveDir, String fileName) throws IOException;
 }

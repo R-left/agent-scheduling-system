@@ -1,18 +1,19 @@
 package com.leftrr.agentscheduling.core;
 
+import com.leftrr.agentscheduling.dto.core.AbortTaskOutcome;
+import com.leftrr.agentscheduling.dto.core.CancelMode;
 import java.util.Map;
 
 /**
- * 任务中止纯逻辑。对应 TS 版 src/core/task-abort.ts 的 requestTaskAbort。
+ * 任务中止纯逻辑。
  */
 public final class TaskAbort {
     private TaskAbort() {
     }
 
     /**
-     * 时序契约：cancelMode 在 {@code token.cancel()} 触发的全部取消监听器执行完毕之后
-     * 才可见；取消回调（onCancel）内读取 {@link ActiveRun#cancelMode()} 恒为 null，
-     * 禁止在回调中依赖它。
+     * 时序坑：cancelMode 要等 token.cancel() 触发的全部取消回调跑完才可见，
+     * onCancel 里读 ActiveRun.cancelMode() 恒为 null，别在回调里依赖它。
      */
     public static AbortTaskOutcome requestTaskAbort(
             Map<String, ActiveRun> activeRuns,
@@ -23,7 +24,7 @@ public final class TaskAbort {
         if (operatorOpenId == null || operatorOpenId.isEmpty()) {
             return AbortTaskOutcome.FORBIDDEN;
         }
-        // CAS 保证并发下恰好一个 STOPPED；cancelMode 只在真正取消成功后写入
+        // cancel() 自带原子性，并发下恰好一个 STOPPED；cancelMode 只在真取消成功后写
         if (active.token().cancel()) {
             active.setCancelMode(CancelMode.STOP);
             return AbortTaskOutcome.STOPPED;

@@ -1,13 +1,14 @@
 package com.leftrr.agentscheduling.cli;
 
+import com.leftrr.agentscheduling.dto.cli.CliId;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/** 对齐 TS registry.ts：适配器注册表与 DEFAULT_CLI 解析。 */
+/** 适配器注册表与 DEFAULT_CLI 解析。 */
 public final class CliAdapterRegistry {
-    // LinkedHashMap 保持 claude→codex 插入序（对齐 TS 对象字面量序），保证 list() 顺序确定
+    // LinkedHashMap 保持 claude→codex 插入序，保证 list() 顺序确定
     private static final Map<CliId, CliAdapter> ADAPTERS;
     static {
         Map<CliId, CliAdapter> adapters = new LinkedHashMap<>();
@@ -26,7 +27,7 @@ public final class CliAdapterRegistry {
         return List.copyOf(ADAPTERS.values());
     }
 
-    /** 对齐 parseCliId()：null/空 → CLAUDE；非法值抛中文文案。 */
+    /** null/空 → CLAUDE；非法值抛中文文案。 */
     public static CliId parseCliId(String value) {
         if (value == null || value.isEmpty()) {
             return CliId.CLAUDE;

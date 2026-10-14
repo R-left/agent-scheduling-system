@@ -1,19 +1,27 @@
 package com.leftrr.agentscheduling.cli;
+import com.leftrr.agentscheduling.mcp.ToolDefinitions;
+import com.leftrr.agentscheduling.mcp.McpCliArgs;
+import com.leftrr.agentscheduling.util.StringUtil;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-
+import com.leftrr.agentscheduling.dto.cli.CliCompactPlan;
+import com.leftrr.agentscheduling.dto.cli.CliEvent;
+import com.leftrr.agentscheduling.dto.cli.CliId;
+import com.leftrr.agentscheduling.dto.cli.CliRunStats;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
 
-/** Claude Code 适配器，对齐 TS claude-adapter.ts。 */
+/**
+ * Claude Code 适配器。
+ */
 public final class ClaudeAdapter implements CliAdapter {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    // JS /\s+/g：UNICODE_CHARACTER_CLASS 对齐 NBSP 等空白（残余差异：﻿，注释见计划 Review Focus 1）
+    // UNICODE_CHARACTER_CLASS 覆盖 NBSP 等 Unicode 空白；U+FEFF 仍不在 \s 里，属已知残余差异
     private static final Pattern WHITESPACE =
             Pattern.compile("\\s+", Pattern.UNICODE_CHARACTER_CLASS);
 
@@ -50,10 +58,9 @@ public final class ClaudeAdapter implements CliAdapter {
 
     @Override
     public CliCompactPlan buildCompactPlan(String sessionId, String instructions) {
-        String trimmed = instructions == null ? "" : JsText.jsTrim(instructions);
+        String trimmed = instructions == null ? "" : StringUtil.trim(instructions);
         String command = trimmed.isEmpty() ? "/compact" : "/compact " + trimmed;
-        // 对齐 TS `command: this.command`（Task 8 CliProcess.spawn(plan.command(), ...) 消费可执行名）
-        // prompt 走 stdin（-p 之后无参数），runClaudeCompact 需要这份文本写入子进程
+        // command 用可执行名本身（CliProcess.spawn 消费）；prompt 走 stdin，调用方要拿它写子进程
         return new CliCompactPlan.ClaudeStreamJson(
                 command(), buildResumeArgs(command, sessionId, CliPromptInput.current()), command);
     }
@@ -68,7 +75,7 @@ public final class ClaudeAdapter implements CliAdapter {
         args.add("--output-format");
         args.add("stream-json");
         args.add("--verbose");
-        args.addAll(AppTools.claudeAppToolArgs());
+        args.addAll(McpCliArgs.claudeArgs());
         return args;
     }
 
@@ -81,7 +88,6 @@ public final class ClaudeAdapter implements CliAdapter {
             return List.of();
         }
 
-        // 对齐 TS `...(sessionId ? { sessionId } : {})`：jsTrim 后空（含空串/空白串）不展开该字段 → null
         String sessionId = sessionOrNull(event);
         if ("system".equals(text(event, "type")) && "init".equals(text(event, "subtype"))
                 && sessionId != null) {
@@ -107,14 +113,14 @@ public final class ClaudeAdapter implements CliAdapter {
                 events.add(new CliEvent.ToolStartEvent(id, name,
                         TOOL_LABELS.getOrDefault(name, "调用 " + name),
                         toolDetail(name, input)));
-                if (AppTools.CLAUDE_CLARIFICATION_TOOL_NAME.equals(name)) {
-                    events.add(new CliEvent.ToolCallEvent(id, AppTools.CLARIFICATION_TOOL_NAME, input));
+                if (ToolDefinitions.CLARIFICATION.claudeToolName().equals(name)) {
+                    events.add(new CliEvent.ToolCallEvent(id, ToolDefinitions.CLARIFICATION.name(), input));
                 }
-                if (AppTools.CLAUDE_PRODUCT_SPEC_TOOL_NAME.equals(name)) {
-                    events.add(new CliEvent.ToolCallEvent(id, AppTools.PRODUCT_SPEC_TOOL_NAME, input));
+                if (ToolDefinitions.PRODUCT_SPEC.claudeToolName().equals(name)) {
+                    events.add(new CliEvent.ToolCallEvent(id, ToolDefinitions.PRODUCT_SPEC.name(), input));
                 }
-                if (AppTools.CLAUDE_DISPATCH_TASK_TOOL_NAME.equals(name)) {
-                    events.add(new CliEvent.ToolCallEvent(id, AppTools.DISPATCH_TASK_TOOL_NAME, input));
+                if (ToolDefinitions.DISPATCH_TASK.claudeToolName().equals(name)) {
+                    events.add(new CliEvent.ToolCallEvent(id, ToolDefinitions.DISPATCH_TASK.name(), input));
                 }
             }
             return events;
@@ -129,7 +135,6 @@ public final class ClaudeAdapter implements CliAdapter {
                 if (toolUseId == null) {
                     continue;
                 }
-                // 对齐 TS `is_error === true`：字符串 "true" 等非布尔值不算失败
                 events.add(new CliEvent.ToolEndEvent(toolUseId,
                         block.path("is_error").isBoolean() && block.path("is_error").asBoolean()));
             }
@@ -138,10 +143,7 @@ public final class ClaudeAdapter implements CliAdapter {
         if (!"result".equals(text(event, "type"))) {
             return List.of();
         }
-        // TS `if (event.is_error)` 为 truthy 判定：字符串 "true" 等真值在 TS 也会触发 error 事件；
-        // Java 侧刻意采用严格布尔判定（isBoolean && asBoolean），字符串 "true" 不触发。
-        // 已知分歧（M3 Task 0 记录）：真实 Claude 输出恒为布尔，严格判定更安全；tool_result 分支
-        // TS 本就是 `is_error === true` 严格比较，无需对齐。
+        // 只认真布尔值，字符串 "true" 不算，防误判出错
         JsonNode isError = event.path("is_error");
         if (isError.isBoolean() && isError.asBoolean()) {
             JsonNode result = event.path("result");
@@ -160,15 +162,15 @@ public final class ClaudeAdapter implements CliAdapter {
         return value.isTextual() ? value.asText() : null;
     }
 
-    /** 对齐 TS `...(sessionId ? { sessionId } : {})`：缺失或 jsTrim 后空不展开该字段，返回 null。 */
+    /** session_id 缺失或 StringUtil.trim 后空 → null。 */
     private static String sessionOrNull(JsonNode event) {
         String sessionId = text(event, "session_id");
-        return sessionId != null && !JsText.jsTrim(sessionId).isEmpty() ? sessionId : null;
+        return sessionId != null && !StringUtil.trim(sessionId).isEmpty() ? sessionId : null;
     }
 
     private static Long longOrNull(JsonNode node, String field) {
         JsonNode value = node.path(field);
-        return value.isNumber() ? value.asLong() : null; // JSON 数字均有限，等价 JS Number.isFinite 判定
+        return value.isNumber() ? value.asLong() : null; // JSON 数字均有限，无需 isFinite 判定
     }
 
     private static Integer intOrNull(JsonNode node, String field) {
@@ -176,7 +178,7 @@ public final class ClaudeAdapter implements CliAdapter {
         return value == null ? null : value.intValue();
     }
 
-    /** 对齐 usageTokens()：只累加存在的数值字段，全缺失返回 null。 */
+    /** 只累加存在的数值字段，全缺失返回 null。 */
     private static Long usageTokens(JsonNode usage) {
         if (!usage.isObject()) {
             return null;
@@ -194,7 +196,7 @@ public final class ClaudeAdapter implements CliAdapter {
         return any ? sum : null;
     }
 
-    /** 对齐 contextWindowTokens()：Object.values → 取 >0 的最大 contextWindow，无合法值 null。 */
+    /** 取 >0 的最大 contextWindow，无合法值 null。 */
     private static Long contextWindowTokens(JsonNode modelUsage) {
         if (!modelUsage.isObject()) {
             return null;
@@ -222,12 +224,12 @@ public final class ClaudeAdapter implements CliAdapter {
                 longOrNull(usage, "output_tokens"),
                 longOrNull(usage, "cache_read_input_tokens"),
                 longOrNull(usage, "cache_creation_input_tokens"),
-                null, // contextUsedTokens：TS parseStats 从不设置该字段（由 TaskProgress 聚合 context 事件填充）
+                null, // contextUsedTokens 由 TaskProgress 聚合 context 事件填充，这里不设
                 contextWindowTokens(event.path("modelUsage")));
         return stats.isEmpty() ? null : stats;
     }
 
-    /** 对齐 shortPath()：normalize 反斜杠 → 取末 2 段（绝对）或末 3 段（相对），元素不足从头取。 */
+    /** 反斜杠归一为 / → 取末 2 段（绝对）或末 3 段（相对），元素不足从头取。 */
     private static String shortPath(JsonNode value) {
         if (!value.isTextual()) {
             return null;
@@ -246,17 +248,17 @@ public final class ClaudeAdapter implements CliAdapter {
         int from = normalized.startsWith("/")
                 ? Math.max(0, parts.size() - 2)
                 : Math.max(0, parts.size() - 3);
-        // 对齐 TS 消费端 `...(detail ? { detail } : {})`：归约结果为空串（如输入 "/"）时 falsy 不展开 → null
+        // 归约结果为空串（如输入 "/"）→ null
         String joined = String.join("/", parts.subList(from, parts.size()));
         return joined.isEmpty() ? null : joined;
     }
 
-    /** 对齐 shortText()：\s+ 折叠 → jsTrim → 超长截 71 字符加 …。 */
+    /** \s+ 折叠空白 → StringUtil.trim → 超长截 71 字符加 …。 */
     private static String shortText(JsonNode value, int maxLength) {
         if (!value.isTextual()) {
             return null;
         }
-        String text = JsText.jsTrim(WHITESPACE.matcher(value.asText()).replaceAll(" "));
+        String text = StringUtil.trim(WHITESPACE.matcher(value.asText()).replaceAll(" "));
         if (text.isEmpty()) {
             return null;
         }
@@ -276,7 +278,7 @@ public final class ClaudeAdapter implements CliAdapter {
         };
     }
 
-    /** 对齐 messageBlocks()：content 为数组时取其中对象元素，否则空。 */
+    /** content 为数组时取其本身，否则空列表。 */
     private static Iterable<JsonNode> values(JsonNode node) {
         return node.isArray() ? node : Collections.emptyList();
     }

@@ -9,16 +9,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 对齐 TS 版 src/im/card.ts 的产品方案三卡（M4 Task 7）：
- * buildProductSpecApprovalCard（card.ts:832-892）、buildProductSpecApprovedCard
- * （card.ts:894-925）、buildProductSpecExpiredCard（card.ts:927-952），
- * 及私有辅助 productDocumentList（card.ts:822-830）。
- *
- * <p>卡片 JSON 用 ObjectNode 手工构造，put 顺序 = TS 对象字面量键序（设计裁决 1）。
- * 交付模式分支用 {@code instanceof ProductSpecRequest.Lark}（对齐 TS
- * {@code deliveryMode === 'lark-doc'}；sealed 接口仅两实现）。approvedAt 按 TS
- * 直接插值透传（不做格式化，escape 仍应用，card.ts:918）。已知分歧：brief 用例 14
- * 称 documentUrl 亦经 escape，但 TS card.ts:824 对 documentUrl 原样插值——以 TS 为准。</p>
+ * 产品方案三卡（待确认 / 已确认 / 已失效）。卡片 JSON 手工构造，键序固定。
+ * approvedAt 原样透传不做格式化；documentUrl 不过 escape。
  */
 public final class ProductSpecCards {
 
@@ -26,22 +18,17 @@ public final class ProductSpecCards {
 
     private ProductSpecCards() {}
 
-    // ---- card.ts:822-830 productDocumentList ----
-
     private static String productDocumentList(ProductSpec.ProductSpecFlow flow) {
         ProductSpec.ProductSpecRequest request = flow.request();
         if (request instanceof ProductSpec.ProductSpecRequest.Lark lark) {
             return "☁️ **飞书云文档** · [打开文档](" + lark.documentUrl() + ")";
         }
-        // T7①：sealed 接口 ProductSpecRequest 仅 permits Local/Lark 两实现，
-        // 上面 instanceof Lark 未命中即必为 Local；若未来新增第三实现，
-        // 此强转会抛 ClassCastException——此处依赖 Lark/Local 二分完备。
+        // sealed 接口只有 Local/Lark 两个实现，走到这必是 Local；
+        // 将来加第三个实现这里强转会炸，记得回来改
         ProductSpec.ProductSpecRequest.Local local = (ProductSpec.ProductSpecRequest.Local) request;
         return "📘 **Spec** · `" + CardText.escapeFeishuMarkdown(local.specPath()) + "`\n"
                 + "🎫 **Tickets** · `" + CardText.escapeFeishuMarkdown(local.ticketsPath()) + "`";
     }
-
-    // ---- card.ts:832-892 buildProductSpecApprovalCard ----
 
     public static ObjectNode buildProductSpecApprovalCard(ProductSpec.ProductSpecFlow flow) {
         ProductSpec.ProductSpecRequest request = flow.request();
@@ -95,10 +82,7 @@ public final class ProductSpecCards {
         return card(config, header, elements);
     }
 
-    // ---- card.ts:894-925 buildProductSpecApprovedCard ----
-
     public static ObjectNode buildProductSpecApprovedCard(ProductSpec.ProductSpecFlow flow) {
-        // TS: [...].filter(Boolean).join('\n\n')——空串段剔除
         List<String> parts = new ArrayList<>();
         parts.add("**" + CardText.escapeFeishuMarkdown(flow.request().title()) + "**");
         String summary = CardText.escapeFeishuMarkdown(flow.request().summary());
@@ -106,7 +90,6 @@ public final class ProductSpecCards {
             parts.add(summary);
         }
         parts.add("**已确认文档**\n" + productDocumentList(flow));
-        // TS: flow.approvedAt ? `确认时间：${escapeFeishuMarkdown(flow.approvedAt)}` : ''（真值检查 + 直接插值透传）
         String approvedAt = flow.approvedAt();
         if (approvedAt != null && !approvedAt.isEmpty()) {
             parts.add("确认时间：" + CardText.escapeFeishuMarkdown(approvedAt));
@@ -132,8 +115,6 @@ public final class ProductSpecCards {
         return card(config, header, singleElementArray(markdown(String.join("\n\n", parts))));
     }
 
-    // ---- card.ts:927-952 buildProductSpecExpiredCard ----
-
     public static ObjectNode buildProductSpecExpiredCard(ProductSpec.ProductSpecFlow flow) {
         String title = flow.request().title();
         ObjectNode summaryNode = FACTORY.objectNode();
@@ -141,7 +122,7 @@ public final class ProductSpecCards {
         ObjectNode config = FACTORY.objectNode();
         config.put("update_multi", true);
         config.set("summary", summaryNode);
-        // card.ts:936-939 header grey 只有 title，无 subtitle（键省略，非 put null）
+        // 失效卡没有 subtitle——键整个省略，别 put null（会输出 "subtitle": null）
         ObjectNode titleNode = FACTORY.objectNode();
         titleNode.put("tag", "plain_text");
         titleNode.put("content", "产品方案确认已失效");
@@ -163,7 +144,6 @@ public final class ProductSpecCards {
         return array;
     }
 
-    /** {tag:'markdown', content}（card.ts 键序）。 */
     private static ObjectNode markdown(String content) {
         ObjectNode node = FACTORY.objectNode();
         node.put("tag", "markdown");
@@ -177,7 +157,7 @@ public final class ProductSpecCards {
         return node;
     }
 
-    /** 卡片外壳（键序 schema/config/header/body；body 键序 direction/vertical_spacing/elements）。 */
+    /** 键序固定。 */
     private static ObjectNode card(ObjectNode config, ObjectNode header, ArrayNode elements) {
         ObjectNode body = FACTORY.objectNode();
         body.put("direction", "vertical");

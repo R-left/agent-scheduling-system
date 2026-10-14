@@ -1,31 +1,32 @@
 package com.leftrr.agentscheduling.cli;
+import com.leftrr.agentscheduling.mcp.McpCliArgs;
+import com.leftrr.agentscheduling.mcp.ToolDefinitions;
+import com.leftrr.agentscheduling.util.StringUtil;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.NullNode;
-
+import com.leftrr.agentscheduling.dto.cli.CliCompactPlan;
+import com.leftrr.agentscheduling.dto.cli.CliEvent;
+import com.leftrr.agentscheduling.dto.cli.CliId;
+import com.leftrr.agentscheduling.dto.cli.CliRunStats;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.BooleanSupplier;
 import java.util.regex.Pattern;
 
-/** Codex 适配器，对齐 TS codex-adapter.ts。 */
+/** Codex 适配器。 */
 public final class CodexAdapter implements CliAdapter {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    // 同 ClaudeAdapter：UNICODE_CHARACTER_CLASS 对齐 JS \s
+    // 同 ClaudeAdapter：\s 启用 UNICODE_CHARACTER_CLASS 覆盖 Unicode 空白
     private static final Pattern WHITESPACE =
             Pattern.compile("\\s+", Pattern.UNICODE_CHARACTER_CLASS);
 
     private final BooleanSupplier windows;
 
     public CodexAdapter() {
-        this(CliProcess::isWindows);
-    }
-
-    /** 包级构造器注入平台判定，测试两个分支。 */
-    CodexAdapter(BooleanSupplier windows) {
-        this.windows = windows;
+        this.windows = CliProcess::isWindows;
     }
 
     @Override public CliId id() { return CliId.CODEX; }
@@ -47,7 +48,7 @@ public final class CodexAdapter implements CliAdapter {
     }
 
     private List<String> baseArgs(boolean resume, String sessionId) {
-        List<String> args = new ArrayList<>(AppTools.codexAppToolArgs());
+        List<String> args = new ArrayList<>(McpCliArgs.codexArgs());
         args.add("exec");
         if (resume) {
             args.add("resume");
@@ -57,7 +58,7 @@ public final class CodexAdapter implements CliAdapter {
         if (resume) {
             args.add(sessionId);
         }
-        // Windows 上沙箱功能不支持，必须完全禁用；approvals 也一并绕过。
+        // Windows 沙箱不支持，只能完全禁用；approvals 一并绕过
         args.add(windows.getAsBoolean()
                 ? "--dangerously-bypass-approvals-and-sandbox"
                 : "--yolo");
@@ -66,7 +67,7 @@ public final class CodexAdapter implements CliAdapter {
 
     @Override
     public CliCompactPlan buildCompactPlan(String sessionId, String instructions) {
-        // 对齐 TS：Codex 的 compact 忽略 instructions，走 app-server JSON-RPC
+        // Codex 的 compact 忽略 instructions，走 app-server JSON-RPC
         return new CliCompactPlan.CodexAppServer(command(), List.of("app-server", "--stdio"), sessionId);
     }
 
@@ -113,16 +114,16 @@ public final class CodexAdapter implements CliAdapter {
             List<CliEvent> events = new ArrayList<>();
             events.add(new CliEvent.ToolStartEvent(id, tool.toolName(), tool.label(), tool.detail()));
             if ("mcp_tool_call".equals(text(item, "type"))
-                    && "agent_os".equals(text(item, "server"))
-                    && (AppTools.CLARIFICATION_TOOL_NAME.equals(text(item, "tool"))
-                        || AppTools.PRODUCT_SPEC_TOOL_NAME.equals(text(item, "tool"))
-                        || AppTools.DISPATCH_TASK_TOOL_NAME.equals(text(item, "tool")))) {
+                    && "agent_scheduling".equals(text(item, "server"))
+                    && (ToolDefinitions.CLARIFICATION.name().equals(text(item, "tool"))
+                        || ToolDefinitions.PRODUCT_SPEC.name().equals(text(item, "tool"))
+                        || ToolDefinitions.DISPATCH_TASK.name().equals(text(item, "tool")))) {
                 JsonNode input = item.path("arguments");
                 if (input.isMissingNode() || input.isNull()) {
-                    input = item.path("input"); // 对齐 `arguments ?? input`
+                    input = item.path("input"); // arguments 缺失时回退 input
                 }
                 if (input.isMissingNode()) {
-                    // arguments 与 input 皆缺：TS undefined 经 JSON 序列化为 null 的形态，M6 消费侧用 isNull() 判空
+                    // arguments 与 input 皆缺：以显式 null 占位，消费侧用 isNull() 判空
                     input = NullNode.getInstance();
                 }
                 events.add(new CliEvent.ToolCallEvent(id, text(item, "tool"), input));
@@ -141,12 +142,11 @@ public final class CodexAdapter implements CliAdapter {
     private record ToolInfo(String toolName, String label, String detail) {}
 
     private static ToolInfo toolInfo(JsonNode item) {
-        // type 缺失时 text() 返回 null，switch 直接作用于 null 会 NPE（TS undefined 走 default 分支），先兜底
+        // type 缺失时 text() 返回 null，switch 直接作用于 null 会 NPE，先兜底
         String itemType = text(item, "type");
         if (itemType == null) {
             return null;
         }
-        // brief 原文 shortText(item.path(...)) 传 JsonNode 无法通过编译，先经 text() 取 String（非文本 → null，语义不变）
         return switch (itemType) {
             case "command_execution" -> new ToolInfo("Bash", "运行命令", shortText(text(item, "command")));
             case "file_change" -> new ToolInfo("Edit", "修改文件", firstChangedPath(item));
@@ -157,7 +157,7 @@ public final class CodexAdapter implements CliAdapter {
         };
     }
 
-    /** 对齐 [server, tool].filter(Boolean).join('.')：空串过滤。 */
+    /** server 与 tool 以 '.' 拼接，空段过滤。 */
     private static String joinDotted(String server, String tool) {
         StringBuilder sb = new StringBuilder();
         if (server != null && !server.isEmpty()) {
@@ -177,14 +177,14 @@ public final class CodexAdapter implements CliAdapter {
         if (value == null) {
             return null;
         }
-        String text = JsText.jsTrim(WHITESPACE.matcher(value).replaceAll(" "));
+        String text = StringUtil.trim(WHITESPACE.matcher(value).replaceAll(" "));
         if (text.isEmpty()) {
             return null;
         }
         return text.length() > 72 ? text.substring(0, 71) + "…" : text;
     }
 
-    /** 对齐 firstChangedPath()：item.path 直给优先，否则取第一个对象 change 的 path。 */
+    /** item.path 直给优先，否则取第一个对象 change 的 path。 */
     private static String firstChangedPath(JsonNode item) {
         if (item.path("path").isTextual()) {
             return shortText(item.path("path").asText());
@@ -222,7 +222,7 @@ public final class CodexAdapter implements CliAdapter {
         Long total = input == null && output == null
                 ? null
                 : (input == null ? 0 : input) + (output == null ? 0 : output);
-        // CliRunStats 共 9 个字段（brief 代码漏写末位 contextWindowTokens 的 null，补齐以通过编译）
+        // CliRunStats 共 9 个字段，末位 contextWindowTokens 恒为 null
         CliRunStats stats = new CliRunStats(null, null, total, input, output, cacheRead, null, null, null);
         return stats.isEmpty() ? null : stats;
     }

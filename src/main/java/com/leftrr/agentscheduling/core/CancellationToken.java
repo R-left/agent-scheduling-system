@@ -5,17 +5,17 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * 协作式取消令牌，对应 TS 版 Node AbortController/AbortSignal 的本项目用法。
- * 虚拟线程安全：CAS 原子取消；监听器注册/触发不使用 synchronized（避免 pin 载体线程）。
- * 每个监听器恰好执行一次由 per-listener fired CAS 保证（零触发与双重触发均不可达）。
+ * 协作式取消令牌。
+ * 全程不用 synchronized（会把虚拟线程钉在载体线程上）；取消用 CAS 原子完成，
+ * 每个监听器恰好执行一次由 per-listener fired CAS 保证。
  */
 public final class CancellationToken {
     private final AtomicBoolean cancelled = new AtomicBoolean();
     private final CopyOnWriteArrayList<ListenerRegistration> listeners = new CopyOnWriteArrayList<>();
 
     /**
-     * 一次取消监听器注册的句柄。刻意为普通类且不重写 equals/hashCode：
-     * 移除按同一实例（identity）匹配，避免值相等误删其他注册。
+     * 一次取消监听器注册的句柄。刻意不重写 equals/hashCode：
+     * 移除按同一实例（identity）匹配，避免值相等误删别的注册。
      */
     public final class ListenerRegistration {
         final Runnable action;
@@ -44,8 +44,8 @@ public final class CancellationToken {
         return true;
     }
 
-    /** 注册取消监听器并返回注册句柄；若已取消则立即执行一次。恰好一次由 fired CAS 保证：
-     * 若注册先于取消快照，快照遍历触发；否则本方法末尾读到 cancelled 后触发。 */
+    /** 注册取消监听器；若已取消则立即触发一次。恰好一次靠 fired CAS：
+     * 注册先于取消快照则随快照遍历触发，否则这里末尾读到 cancelled 后触发。 */
     public ListenerRegistration register(Runnable listener) {
         ListenerRegistration registration = new ListenerRegistration(listener);
         listeners.add(registration);
@@ -55,7 +55,7 @@ public final class CancellationToken {
         return registration;
     }
 
-    /** 兼容 M1 用法的注册入口（返回句柄可忽略）。 */
+    /** 注册入口（返回句柄可忽略）。 */
     public void onCancel(Runnable listener) {
         register(listener);
     }
@@ -75,7 +75,7 @@ public final class CancellationToken {
         try {
             listener.run();
         } catch (RuntimeException e) {
-            // 对应 Node AbortSignal：单个监听器异常不阻断其他监听器
+            // 单个监听器异常不阻断其他监听器
         }
     }
 }

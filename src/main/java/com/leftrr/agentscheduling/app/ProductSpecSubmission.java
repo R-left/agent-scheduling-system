@@ -1,26 +1,22 @@
 package com.leftrr.agentscheduling.app;
 
-import com.leftrr.agentscheduling.cli.CliRunResult;
-import com.leftrr.agentscheduling.core.ProductDeliveryMode;
+import com.leftrr.agentscheduling.dto.cli.CliRunResult;
+import com.leftrr.agentscheduling.dto.core.ProductDeliveryMode;
 import com.leftrr.agentscheduling.core.ProductSpec;
 
 import java.io.IOException;
 
 /**
- * 产品方案提交校验。对齐 TS 版 src/app/product-spec-submission.ts（48 行）。
- * TS 导出 interface ProductSpecSubmission、async ensureProductSpecSubmission 与私有
- * missingSubmissionPrompt；Java 收敛为同名 record（one public type per file），
- * ensure 与 Retry 接口挂为静态成员，名称与 TS 导出一一对应。
+ * 产品方案提交校验：结果缺 request_spec_approval 调用时用补交提示词重试一轮。
  */
 public record ProductSpecSubmission(CliRunResult result, ProductSpec.ProductSpecRequest request) {
 
-    /** TS options.retry 回调（(prompt, sessionId) => Promise&lt;CliRunResult&gt;）的函数式接口。 */
+    /** 重试回调：按补交提示词再跑一轮 CLI。 */
     @FunctionalInterface
     public interface Retry {
         CliRunResult retry(String prompt, String sessionId) throws IOException, InterruptedException;
     }
 
-    /** TS ensureProductSpecSubmission（product-spec-submission.ts:13-35）。 */
     public static ProductSpecSubmission ensureProductSpecSubmission(CliRunResult result,
             ProductDeliveryMode defaultDeliveryMode, Retry retry)
             throws IOException, InterruptedException {
@@ -40,7 +36,7 @@ public record ProductSpecSubmission(CliRunResult result, ProductSpec.ProductSpec
         return new ProductSpecSubmission(retried, recovered);
     }
 
-    /** TS 私有 missingSubmissionPrompt（product-spec-submission.ts:37-47）；五段文案逐字，包私有供测试钉住。 */
+    /** 补交提示词（产品文案）。 */
     static String missingSubmissionPrompt(ProductDeliveryMode defaultDeliveryMode) {
         return String.join("\n\n",
                 "上一轮已经完成产品方案整理，但没有完成 Agent OS 的结构化提交。",

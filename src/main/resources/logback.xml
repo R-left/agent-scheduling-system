@@ -1,36 +1,4 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!--
-  M7 Task 0（裁决 2）基础配置。pattern 实际形态申报：
-    %d{yyyy-MM-dd HH:mm:ss.SSS} [%level] %msg%n
-  输出观感：`2026-10-13 10:00:00.000 [INFO] <消息>`——对齐计划钦点的
-  「[时间] 级别 msg」结构；消息体与 TS console 文案逐字（R12 备案）。
-
-  出口分流：TS 侧 console.error 对位的锚点（CardActionHandler 澄清续跑失败、
-  Notifications 通知失败）落在 STDERR appender（additivity=false 防重复）；
-  其余（含 CollaborationService 成功日志、SessionView markSessionIdle）走根
-  STDOUT appender——out/err 语义与 TS 对齐。未切锚点的 System.out/err 直写
-  不经此处，配置不改变其行为。
-
-  M7 Task 5（累积裁决 b，Task 2 审查 concern ⑦）：BotMessageOrchestrator 与
-  DocumentCommentScheduler 的 TS console.error（[下载失败]/[卡片] 无 message_id/
-  [CLI] 执行失败/[会话] 保存空闲状态失败/[产品评论] 处理失败与回写失败等）定向
-  STDERR，console.log/warn 保持 STDOUT——两类的日志以 info 为主、error 为辅，
-  logger 级 appender 会把 info/warn 一并吞进同一出口，故按 appender 挂
-  ExactLevelFilter（logging/ExactLevelFilter.java，方案评估见其 javadoc）：每个
-  logger 挂 STDOUT 版（error 剔除）+ STDERR 版（仅 error），additivity=false 防重复。
-
-  M7 Task 5 修复轮（M-1）：`[任务] 回传或收尾失败` 的实际调用点是 Main 的
-  onMessage catch-all 兜底（非 orchestrator 内部），Main logger 同样按双 appender
-  方案接线——Main 的启动 info 日志与 [Skill] warn 保持 STDOUT，catch-all error
-  走 STDERR。
-
-  M-2 备案（有意识选择，不改）：TS console.warn 在 Node 实际落 stderr，但 [Skill]
-  找不到 Skill（Main）、[澄清] 旧卡片更新失败（orchestrator）、[产品评论] 添加/移除
-  处理中表情失败（scheduler）四条 warn 按「失败不阻塞、仅提示」的提示性定位进
-  STDOUT——与 console.error 语义不同级，不随 error 分流；如需严格对齐再议。
-  （Task 6 验收顺手修 N-1：原备案「三条 warn」漏计 orchestrator 的 [澄清] 一条，
-  现按 Main/Orchestrator/Scheduler 三文件 warn 全量清点补齐为四条。）
--->
 <configuration>
   <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
     <encoder>
@@ -87,13 +55,11 @@
   </logger>
 
   <!--
-    Task 6 验收修复轮（F1，必修）：MCP SDK（io.modelcontextprotocol，SLF4J）日志必须静默。
-    AppToolsServer 由 cli 适配层以子进程启动，stdio 即 JSON-RPC 通道——Task 0 引入
-    logback-classic 后，SDK 的 INFO 日志（如 "Client initialize request"）经 root STDOUT
-    appender 写进 stdout，污染协议流，MCP 客户端（claude/codex）握手即失败（Task 6
-    AppToolProbe 零 tool_call 的根因，复现 2 次）。level=off 而非 WARN：stdio 通道对
-    非协议输出零容忍，任何级别的 SDK 日志都不得出现在 stdout。主进程同名 logger 仅
-    在内存流/子进程场景存在，静默无副作用。
+    MCP SDK（io.modelcontextprotocol，SLF4J）日志静默。agent_scheduling server 现以长驻
+    HTTP 形态跑在主进程内（历史形态为 stdio 子进程，当时 stdout 是 JSON-RPC 通道，
+    任何 SDK 日志都会毒化协议流导致 claude/codex 握手失败）。改 HTTP 后 stdout
+    不再承载协议，保留静默只为压掉每会话连接的 INFO 噪音；如需排查 MCP 握手
+    问题，临时把 level 调到 debug。
   -->
   <logger name="io.modelcontextprotocol" level="off"/>
 

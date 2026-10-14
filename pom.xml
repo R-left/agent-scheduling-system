@@ -30,13 +30,7 @@
       <artifactId>jackson-annotations</artifactId>
       <version>2.21</version>
     </dependency>
-    <!-- M7 Task 0（裁决 1）：dotenv-java 供 Main 启动对齐 TS dotenv/config 语义（Task 5 接线） -->
-    <dependency>
-      <groupId>io.github.cdimascio</groupId>
-      <artifactId>dotenv-java</artifactId>
-      <version>3.2.0</version>
-    </dependency>
-    <!-- M7 Task 0（裁决 2）：SLF4J 门面 + logback 实现；1.6.5 官方配对 slf4j 2.0.19 -->
+    <!-- SLF4J 门面 + logback 实现；1.6.5 官方配对 slf4j 2.0.19 -->
     <dependency>
       <groupId>org.slf4j</groupId>
       <artifactId>slf4j-api</artifactId>
@@ -52,6 +46,14 @@
       <artifactId>mcp</artifactId>
       <version>2.0.1</version>
     </dependency>
+    <!-- 内嵌 Tomcat：承载 MCP SDK 的 HttpServletStreamableServerTransportProvider
+         （streamable HTTP，10.1.x = jakarta servlet 6.0）。agent_os MCP server 以
+         长驻 HTTP 形态跑在主进程内，不再按 CLI 运行 spawn stdio 子进程——勿删 -->
+    <dependency>
+      <groupId>org.apache.tomcat.embed</groupId>
+      <artifactId>tomcat-embed-core</artifactId>
+      <version>11.0.26</version>
+    </dependency>
     <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>
@@ -61,6 +63,7 @@
   </dependencies>
 
   <build>
+    <finalName>agent-os</finalName>
     <plugins>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
@@ -71,6 +74,39 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
         <version>3.5.2</version>
+      </plugin>
+      <!-- fat jar：java -jar target/agent-os.jar 直接运行。
+           ServicesResourceTransformer 合并 META-INF/services（MCP SDK 的
+           McpJsonMapper 实现靠 ServiceLoader 定位，不合并则 stdio server 起不来）；
+           排除签名文件避免合并后签名失效告警。 -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.6.0</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals><goal>shade</goal></goals>
+            <configuration>
+              <transformers>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <mainClass>com.leftrr.agentscheduling.Main</mainClass>
+                </transformer>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+              </transformers>
+              <filters>
+                <filter>
+                  <artifact>*:*</artifact>
+                  <excludes>
+                    <exclude>META-INF/*.SF</exclude>
+                    <exclude>META-INF/*.DSA</exclude>
+                    <exclude>META-INF/*.RSA</exclude>
+                  </excludes>
+                </filter>
+              </filters>
+            </configuration>
+          </execution>
+        </executions>
       </plugin>
     </plugins>
   </build>

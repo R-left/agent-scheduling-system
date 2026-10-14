@@ -1,10 +1,12 @@
 package com.leftrr.agentscheduling.core;
+import com.leftrr.agentscheduling.util.JsonUtil;
+import com.leftrr.agentscheduling.util.IsoTimeUtil;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.leftrr.agentscheduling.cli.CliId;
-
+import com.leftrr.agentscheduling.dto.cli.CliId;
+import com.leftrr.agentscheduling.dto.core.SessionStatus;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -16,9 +18,9 @@ import java.util.Map;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
- * 会话 JSON 持久化。对应 TS 版 src/core/session-store.ts 的 JsonSessionStore。
+ * 会话 JSON 持久化。
  * 旧格式迁移（缺 botId/workspaceDir）、中断恢复（creating/active → idle）、非法行跳过，
- * 任一发生即回写文件（needsCleanup）。写串行化：TS Promise 队列 → ReentrantLock（设计裁决 7）。
+ * 任一发生即回写文件（needsCleanup）。写串行化用 ReentrantLock。
  */
 public final class JsonSessionStore implements SessionStore {
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -45,11 +47,11 @@ public final class JsonSessionStore implements SessionStore {
         try {
             content = Files.readString(filePath, StandardCharsets.UTF_8);
         } catch (NoSuchFileException e) {
-            return List.of(); // 对齐 readdir/readFile ENOENT → []
+            return List.of();
         }
         JsonNode rows = MAPPER.readTree(content);
         if (rows == null || rows.isMissingNode()) {
-            // 对齐 TS：空文件 JSON.parse 抛 SyntaxError 直通（与非法 JSON 同为解析失败路径），
+            // 空文件同样按解析失败处理（与非法 JSON 同一失败路径），
             // 不走「会话文件格式错误」
             throw new IOException("会话状态文件解析失败: " + filePath);
         }
@@ -62,7 +64,7 @@ public final class JsonSessionStore implements SessionStore {
             Migration migration = migrateLegacySession(row);
             Session parsed = parseSession(migration.candidate());
             if (parsed == null) {
-                needsCleanup = true; // 对齐 safeParse 失败 → 跳行
+                needsCleanup = true;
                 continue;
             }
             if (migration.migrated()) {
@@ -82,10 +84,10 @@ public final class JsonSessionStore implements SessionStore {
 
     @Override
     public void save(List<Session> sessions) throws IOException {
-        String snapshot = JsonFormat.toJson(sessions) + "\n";
+        String snapshot = JsonUtil.toJson(sessions) + "\n";
         writeLock.lock();
         try {
-            JsonFormat.writeAtomic(filePath, snapshot);
+            JsonUtil.writeAtomic(filePath, snapshot);
         } finally {
             writeLock.unlock();
         }
@@ -93,7 +95,7 @@ public final class JsonSessionStore implements SessionStore {
 
     private record Migration(JsonNode candidate, boolean migrated) {}
 
-    /** 对齐 migrateLegacySession()：缺 botId/workspaceDir 的旧行就地补齐。 */
+    /** 缺 botId/workspaceDir 的旧行就地补齐。 */
     private Migration migrateLegacySession(JsonNode row) {
         if (row == null || !row.isObject()) {
             return new Migration(row, false);
@@ -118,7 +120,7 @@ public final class JsonSessionStore implements SessionStore {
         return new Migration(candidate, true);
     }
 
-    /** 对齐 recoverInterruptedSession()：中断在中途的会话恢复为 idle。 */
+    /** 中断在中途的会话恢复为 idle。 */
     static Session recoverInterruptedSession(Session session) {
         if (session.status() != SessionStatus.CREATING && session.status() != SessionStatus.ACTIVE) {
             return session;
@@ -126,7 +128,7 @@ public final class JsonSessionStore implements SessionStore {
         return session.withStatus(SessionStatus.IDLE, session.updatedAt());
     }
 
-    /** 对齐 SessionSchema.safeParse：非法返回 null（不抛）。逐字段校验规则见各 helper。 */
+    /** 解析单行会话记录：非法返回 null（不抛）。逐字段校验规则见各 helper。 */
     static Session parseSession(JsonNode row) {
         if (row == null || !row.isObject()) {
             return null;
@@ -142,7 +144,7 @@ public final class JsonSessionStore implements SessionStore {
         SessionStatus status = statusRaw == null ? null : SessionStatus.fromId(statusRaw);
         String createdAt = zodDateTimeText(row, "createdAt");
         String updatedAt = zodDateTimeText(row, "updatedAt");
-        // z.string().min(1).optional()：缺席 OK；存在（含显式 null）必须是非空字符串
+        // 可选字段：缺席 OK；存在（含显式 null）必须是非空字符串
         String cliSessionId = null;
         JsonNode cliSessionNode = row.get("cliSessionId");
         if (cliSessionNode != null) {
@@ -168,7 +170,7 @@ public final class JsonSessionStore implements SessionStore {
 
     private static String zodDateTimeText(JsonNode row, String field) {
         JsonNode value = row.get(field);
-        return value != null && value.isTextual() && IsoTime.isZodDateTime(value.asText())
+        return value != null && value.isTextual() && IsoTimeUtil.isZodDateTime(value.asText())
                 ? value.asText()
                 : null;
     }

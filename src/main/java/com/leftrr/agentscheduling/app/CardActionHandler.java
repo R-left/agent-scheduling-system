@@ -3,71 +3,47 @@ package com.leftrr.agentscheduling.app;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.leftrr.agentscheduling.cli.CliAdapter;
 import com.leftrr.agentscheduling.cli.CliAdapterRegistry;
-import com.leftrr.agentscheduling.cli.CliSessionSummary;
-import com.leftrr.agentscheduling.cli.JsText;
+import com.leftrr.agentscheduling.util.StringUtil;
 import com.leftrr.agentscheduling.cli.NativeSessions;
-import com.leftrr.agentscheduling.core.AbortTaskOutcome;
 import com.leftrr.agentscheduling.core.ActiveRun;
 import com.leftrr.agentscheduling.core.BotRegistry;
 import com.leftrr.agentscheduling.core.CancellationToken;
 import com.leftrr.agentscheduling.core.Clarification;
 import com.leftrr.agentscheduling.core.Collaboration;
-import com.leftrr.agentscheduling.core.ProductDeliveryMode;
 import com.leftrr.agentscheduling.core.ProductSpec;
 import com.leftrr.agentscheduling.core.Session;
-import com.leftrr.agentscheduling.core.SessionStatus;
 import com.leftrr.agentscheduling.core.TaskAbort;
+import com.leftrr.agentscheduling.dto.app.BotRuntime;
+import com.leftrr.agentscheduling.dto.cli.CliSessionSummary;
+import com.leftrr.agentscheduling.dto.core.AbortTaskOutcome;
+import com.leftrr.agentscheduling.dto.core.ProductDeliveryMode;
+import com.leftrr.agentscheduling.dto.core.SessionStatus;
+import com.leftrr.agentscheduling.dto.im.CardAction;
+import com.leftrr.agentscheduling.dto.im.CardActionResponse;
 import com.leftrr.agentscheduling.im.BotOptions;
-import com.leftrr.agentscheduling.im.CardAction;
-import com.leftrr.agentscheduling.im.CardActionResponse;
 import com.leftrr.agentscheduling.im.ClarificationCards;
 import com.leftrr.agentscheduling.im.ProductSpecCards;
 import com.leftrr.agentscheduling.im.SessionCards;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
- * 卡片按钮回调处理。对齐 TS 版 src/app/card-action-handler.ts（295 行）：
- * 按 value.action 分流四类回调——approve_product_spec / answer_clarification /
- * resume_cli_session / abort_task，其余 action 返回 null（TS undefined）。
- * 全部分支不发消息：结果一律 toast（+ 可选的卡片 JSON 更新），文案逐字照搬 TS。
+ * 卡片按钮回调分流：approve_product_spec / answer_clarification / resume_cli_session /
+ * abort_task 四分支，其余 action 返回 null；结果一律 toast（+ 可选卡片更新），不发消息。
  *
- * <p>TS→Java 差异（裁决 1/4/5/12）：</p>
- * <ul>
- * <li>裁决 5：CardActionListener 不容受检异常且 SDK 回调线程不可阻塞——工厂返回的监听器
- *     把 handler 全部逻辑提交到虚拟线程执行并 join 后同步返回结果。join 期间占用 SDK WS
- *     线程，与 TS await 占用等价（低并发个人系统可接受）；resume 分支最长 15s
- *     （listNativeCliSessions 超时）。</li>
- * <li>裁决 4：answer_clarification complete 路径的 queueMicrotask 时序——返回
- *     CardActionResponse 之前完成全部内存态变更（transition/activeRuns.set/flows.delete），
- *     然后交后台虚拟线程续跑 {@code continueClarificationFlow}（内含 2h 级 CLI 执行 + 阻塞
- *     finish，同步执行会挂死卡片回调）；续跑异常 catch-all 只记 stderr（对齐 TS
- *     {@code void promise.catch(console.error)}），不外抛。测试可经包私有重载注入启动器。</li>
- * <li>裁决 12：TS 的 {@code typeof x === 'string' ? x : ''} 类型守卫落为
- *     {@code value.path(key).asText("")}（Jackson asText 对非文本节点返回 ""，恰好对齐）；
- *     {@code formValue.custom_answer} 仅 isTextual 时取值并按 JS 语义 trim
- *     （{@link JsText#jsTrim}）；{@code value.custom === true} 用 isBoolean+asBoolean
- *     严判（asBoolean 会把 "true" 强转，不等价于 TS 严格相等）。</li>
- * <li>受检异常逐点 catch → toast（TS 各 catch 分支文案照搬）；TS 无 catch 的
- *     {@code productSpecFlows.approve}（内存实现不会失败）在 Java 因 Json 子类声明
- *     IOException 也须承接——按通用兜底 toast error(message) 备案。</li>
- * <li>本文件 TS 无 console 输出（无日志需求）；续跑 catch-all 的 error 为 TS console.error
- *     的对位——M7 Task 0（裁决 2）已切 SLF4J error 日志（logback STDERR appender，
- *     文案逐字不变）。</li>
- * </ul>
+ * <p>SDK 回调线程不可阻塞、不容受检异常：handler 整体在虚拟线程上跑，join 后同步
+ * 返回结果（join 占着 SDK WS 线程，个人系统低并发可接受）。澄清答完的续跑是
+ * 分钟级 CLI 执行，交后台虚拟线程，回调先返回。</p>
  */
 public final class CardActionHandler {
 
-    /** M7 Task 0（裁决 2）：TS console.error 的 SLF4J 对位；logback.xml 将本 logger 定向 STDERR。 */
+    /** logback.xml 将本 logger 定向 STDERR。 */
     private static final Logger LOGGER = LoggerFactory.getLogger(CardActionHandler.class);
 
-    /** 对齐 TS options 对象（card-action-handler.ts:22-27）。 */
     public record CardActionHandlerOptions(
             AppRuntime runtime,
             BotRegistry.BotConfig config,
@@ -76,42 +52,26 @@ public final class CardActionHandler {
 
     private CardActionHandler() {}
 
-    /**
-     * 生产续跑启动器（裁决 4）：后台虚拟线程执行 {@code continueClarificationFlow}，
-     * 异常 catch-all 记 SLF4J error 日志（对齐 TS queueMicrotask + void promise.catch(console.error)）。
-     */
+    /** 生产续跑启动器：后台虚拟线程执行续跑，异常只记日志不外抛。 */
     private static final Consumer<ClarificationRunner.ClarificationContinuation>
             PRODUCTION_CONTINUATION_STARTER = continuation -> Thread.ofVirtual().start(() -> {
                 try {
                     ClarificationRunner.continueClarificationFlow(continuation);
                 } catch (InterruptedException error) {
                     Thread.currentThread().interrupt();
-                    // M7 Task 0（裁决 2）：System.err → SLF4J，{} 占位与原拼接等价，文案不变
                     LOGGER.error("[澄清] 继续执行失败: {}", error.getMessage());
                 } catch (Exception error) {
                     LOGGER.error("[澄清] 继续执行失败: {}", error.getMessage());
                 }
             });
 
-    /** TS createCardActionHandler（card-action-handler.ts:22）。 */
+    /** 工厂入口：卡片回调统一走虚拟线程，阻塞调用不占 SDK WS 线程。 */
     public static BotOptions.CardActionListener createCardActionHandler(
             CardActionHandlerOptions options) {
-        return createCardActionHandler(options, PRODUCTION_CONTINUATION_STARTER);
-    }
-
-    /**
-     * 测试缝（包私有）：注入续跑启动器，替换裁决 4 的后台虚拟线程启动
-     * （生产路径走 {@link #PRODUCTION_CONTINUATION_STARTER}）。
-     */
-    static BotOptions.CardActionListener createCardActionHandler(
-            CardActionHandlerOptions options,
-            Consumer<ClarificationRunner.ClarificationContinuation> continuationStarter) {
         BotOptions.CardActionListener handler =
-                action -> handleAction(options, action, continuationStarter);
-        // 裁决 5：整体「虚拟线程执行 + join」包裹。handler 内部（finish 阻塞排空、
-        // listNativeCliSessions 等）全部跑在可阻塞的虚拟线程上；join 占用 SDK WS 线程
-        // 与 TS await 占用等价。TS promise reject → Java 把异常在调用线程重抛
-        // （FeishuBots 的 CustomEventHandler 声明 throws Exception，传播形态对齐）。
+                action -> handleAction(options, action, PRODUCTION_CONTINUATION_STARTER);
+        // handler 内部有阻塞调用（finish 排空、listNativeCliSessions），必须跑在
+        // 可阻塞的虚拟线程上；join 占着 SDK WS 线程，低并发可接受
         return action -> {
             AtomicReference<CardActionResponse> result = new AtomicReference<>();
             AtomicReference<Throwable> failure = new AtomicReference<>();
@@ -125,14 +85,13 @@ public final class CardActionHandler {
             try {
                 worker.join();
             } catch (InterruptedException error) {
-                // SDK WS 线程被中断属异常路径：恢复中断标记后按 TS undefined 返回
+                // 被中断属异常路径：恢复标志后返回 null
                 Thread.currentThread().interrupt();
                 return null;
             }
             Throwable error = failure.get();
             if (error != null) {
-                // ⑯：Error 原样重抛（OOM 等致命错误不得被包装成 RuntimeException 掩盖类型）；
-                // RuntimeException 原样重抛（TS promise reject 的 Error 对位）；仅受检异常包装
+                // Error 原样重抛——OOM 之类不能被包成 RuntimeException 掩盖类型
                 if (error instanceof RuntimeException runtimeError) {
                     throw runtimeError;
                 }
@@ -145,7 +104,7 @@ public final class CardActionHandler {
         };
     }
 
-    /** 四分支分流（TS 29-293 的 if 链；未知 action 返回 null = TS undefined）。 */
+    /** 四分支分流；未知 action 返回 null。 */
     private static CardActionResponse handleAction(CardActionHandlerOptions options,
             CardAction action,
             Consumer<ClarificationRunner.ClarificationContinuation> continuationStarter) {
@@ -158,7 +117,7 @@ public final class CardActionHandler {
         };
     }
 
-    // ---- approve_product_spec（TS 30-113） ----
+    // ---- approve_product_spec ----
 
     private static CardActionResponse approveProductSpec(CardActionHandlerOptions options,
             CardAction action) {
@@ -190,8 +149,7 @@ public final class CardActionHandler {
         try {
             approved = runtime.productSpecFlows().approve(flowToken);
         } catch (IOException error) {
-            // TS 内存实现 approve 不可能 reject（无 catch 分支）；Java Json 子类声明
-            // IOException 须承接——按通用兜底 toast（裁决 1 逐点 catch），无 TS 对应文案
+            // 内存实现不会失败，但 Json 子类声明了 IOException，须承接
             return toast(CardActionResponse.ToastType.ERROR, errorMessage(error));
         }
         if (approved == null) {
@@ -203,7 +161,6 @@ public final class CardActionHandler {
                 return toast(CardActionResponse.ToastType.ERROR, "当前 Bot 尚未就绪。");
             }
             Collaboration.CollaborationOrigin collaboration = approved.collaboration();
-            // TS 三元：deliveryMode === 'lark-doc' → sealed 接口仅 Lark/Local 两实现
             String productDescription;
             if (approved.request() instanceof ProductSpec.ProductSpecRequest.Lark lark) {
                 productDescription = "文档 URL：" + lark.documentUrl();
@@ -212,8 +169,6 @@ public final class CardActionHandler {
                         (ProductSpec.ProductSpecRequest.Local) approved.request();
                 productDescription = "Spec：" + local.specPath() + "\nTickets：" + local.ticketsPath();
             }
-            // TS runtime.sessions.get(approved.sessionId)?.workspaceDir ?? config.workspaceDir
-            //（?? 对 nullish 回退：会话存在但 workspaceDir 为 null 同样回落）
             Session session = runtime.sessions().get(approved.sessionId());
             String workspaceDir = session != null && session.workspaceDir() != null
                     ? session.workspaceDir() : config.workspaceDir();
@@ -243,7 +198,6 @@ public final class CardActionHandler {
                                 collaboration.maxRounds(),
                                 workspaceDir));
             } catch (RuntimeException error) {
-                // TS catch (error)：Error.message → RuntimeException.getMessage
                 return toast(CardActionResponse.ToastType.ERROR,
                         "确认结果交回失败：" + error.getMessage());
             }
@@ -254,7 +208,7 @@ public final class CardActionHandler {
                 ProductSpecCards.buildProductSpecApprovedCard(approved));
     }
 
-    // ---- answer_clarification（TS 115-223） ----
+    // ---- answer_clarification ----
 
     private static CardActionResponse answerClarification(CardActionHandlerOptions options,
             CardAction action,
@@ -285,7 +239,7 @@ public final class CardActionHandler {
             answered = runtime.clarificationFlows()
                     .answerWithRecommendation(flowToken, "remaining".equals(decisionMode));
         } else {
-            // TS action.value.custom === true 严格相等 → isBoolean + asBoolean
+            // asBoolean 会把 "true" 强转，必须 isBoolean 严判
             JsonNode customNode = action.value().path("custom");
             boolean custom = customNode.isBoolean() && customNode.asBoolean();
             String optionId = action.value().path("optionId").asText("");
@@ -296,10 +250,9 @@ public final class CardActionHandler {
                     break;
                 }
             }
-            // TS typeof action.formValue.custom_answer === 'string' ? .trim() : ''
             JsonNode customAnswerNode = action.formValue().path("custom_answer");
             String customAnswer =
-                    customAnswerNode.isTextual() ? JsText.jsTrim(customAnswerNode.asText()) : "";
+                    customAnswerNode.isTextual() ? StringUtil.trim(customAnswerNode.asText()) : "";
             String answer = custom ? customAnswer
                     : selectedOption != null ? selectedOption.label() : "";
             if (answer.isEmpty()) {
@@ -326,8 +279,7 @@ public final class CardActionHandler {
         if (session.status() == SessionStatus.ACTIVE) {
             return toast(CardActionResponse.ToastType.WARNING, "当前会话仍在执行，请稍后重试。");
         }
-        // TS new AbortController() → per-run 令牌（对齐 M2 CancellationToken 先例）；
-        // ⑮：声明在 try 外——续跑启动器移出 try 后仍需引用
+        // 取消令牌声明在 try 外，续跑启动器要用
         CancellationToken run = new CancellationToken();
         try {
             runtime.sessions().transition(session.id(), SessionStatus.ACTIVE);
@@ -335,12 +287,10 @@ public final class CardActionHandler {
                     new ActiveRun(run, answered.flow().ownerOpenId()));
             runtime.clarificationFlows().delete(flowToken);
         } catch (IOException | RuntimeException error) {
-            // TS catch (error)：transition 抛错的通用兜底（(error as Error).message）
             return toast(CardActionResponse.ToastType.ERROR, errorMessage(error));
         }
-        // 裁决 4：内存态变更已全部完成，续跑交后台虚拟线程（queueMicrotask 对位）；
-        // ⑮：starter 在 try 之外调用——starter 抛 RuntimeException 不应误报失败 toast
-        //（此时内存态已前进、transition 已生效），生产启动器自身已 catch-all 只记 error 日志
+        // 内存态变更已全部完成，续跑交后台线程；starter 放 try 外调用——它自己抛错
+        // 不该误报失败 toast（此时内存态已前进、transition 已生效）
         continuationStarter.accept(new ClarificationRunner.ClarificationContinuation(
                 runtime, botRuntime.bot(), config, answered.flow(), run,
                 options.defaultProductDeliveryMode()));
@@ -350,7 +300,7 @@ public final class CardActionHandler {
                 ClarificationCards.buildClarificationContinuingCard(answered.flow()));
     }
 
-    // ---- resume_cli_session（TS 225-272） ----
+    // ---- resume_cli_session ----
 
     private static CardActionResponse resumeCliSession(CardActionHandlerOptions options,
             CardAction action) {
@@ -386,15 +336,14 @@ public final class CardActionHandler {
                             updated.id(), cliAdapter.displayName(), updated.cliSessionId(),
                             nativeSessions)));
         } catch (IOException | InterruptedException | RuntimeException error) {
-            // TS catch (error)：listNativeCliSessions / setCliSessionId 的通用兜底
             if (error instanceof InterruptedException) {
-                Thread.currentThread().interrupt(); // 中断路径恢复标记后仍按 TS catch 分支 toast
+                Thread.currentThread().interrupt(); // 恢复标志后仍走同一 toast
             }
             return toast(CardActionResponse.ToastType.ERROR, errorMessage(error));
         }
     }
 
-    // ---- abort_task（TS 274-292） ----
+    // ---- abort_task ----
 
     private static CardActionResponse abortTask(CardActionHandlerOptions options,
             CardAction action) {
@@ -409,16 +358,11 @@ public final class CardActionHandler {
         };
     }
 
-    /** 仅 toast、无卡片更新的响应（TS { toast: {...} }）。 */
     private static CardActionResponse toast(CardActionResponse.ToastType type, String content) {
         return new CardActionResponse(new CardActionResponse.Toast(type, content), null);
     }
 
-    /**
-     * ⑭：{@code error.getMessage()} 可能为 null（无消息异常，如裸 NPE），toast content
-     * 会变成字面 "null"——null 时回落 {@code error.toString()} 兜底（TS
-     * {@code (error as Error).message} 恒为字符串的等价形态）。
-     */
+    /** getMessage() 可能为 null（裸 NPE 之类），toast 会显示字面 "null"——回落 toString()。 */
     private static String errorMessage(Throwable error) {
         return error.getMessage() != null ? error.getMessage() : error.toString();
     }

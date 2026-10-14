@@ -4,14 +4,16 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-
+import com.leftrr.agentscheduling.dto.im.BotIdentity;
+import com.leftrr.agentscheduling.dto.im.DownloadedResource;
+import com.leftrr.agentscheduling.dto.im.IncomingDocumentComment;
+import com.leftrr.agentscheduling.dto.im.LarkResponse;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
- * Bot 门面的 LarkApi 实现。对齐 TS 版 src/im/lark.ts:224-435 中 startBot
- * 返回的业务方法（REST 部分）；TS await 的 Promise → 同步返回。
+ * Bot 门面的 LarkApi 实现（REST 部分），全部同步返回。
  */
 public final class LarkBot implements Bot {
 
@@ -23,25 +25,21 @@ public final class LarkBot implements Bot {
         this.api = api;
     }
 
-    /** 对齐 lark.ts:151-159 fetchBotIdentity。 */
     @Override
     public BotIdentity getIdentity() {
         LarkResponse response = api.fetchBotInfo();
         JsonNode data = response.data();
         JsonNode bot = data == null ? null : data.path("bot");
         String openId = bot == null ? null : bot.path("open_id").asText(null);
-        // TS !bot?.open_id：缺失/null/空串均视为缺失
         if (openId == null || openId.isEmpty()) {
             throw new LarkException("飞书没有返回 bot open_id");
         }
         JsonNode appNameNode = bot.path("app_name");
         String appName = appNameNode.isMissingNode() || appNameNode.isNull() ? null : appNameNode.asText();
-        // TS bot.app_name?.trim() || 'Bot'
         String name = appName == null || appName.trim().isEmpty() ? "Bot" : appName.trim();
         return new BotIdentity(openId, name);
     }
 
-    /** 对齐 lark.ts:242-254 reply。 */
     @Override
     public String reply(String messageId, String text, boolean replyInThread) {
         ObjectNode content = MAPPER.createObjectNode();
@@ -50,14 +48,12 @@ public final class LarkBot implements Bot {
         return messageIdOf(response);
     }
 
-    /** 对齐 lark.ts:256-266 replyCard。 */
     @Override
     public String replyCard(String messageId, JsonNode card, boolean replyInThread) {
         LarkResponse response = api.replyMessage(messageId, "interactive", card.toString(), replyInThread);
         return messageIdOf(response);
     }
 
-    /** 对齐 lark.ts:268-278 replyMention。 */
     @Override
     public String replyMention(String messageId, BotIdentity target, String text, boolean replyInThread) {
         String content = LarkPosts.buildMentionPostContent(target, text).toString();
@@ -65,19 +61,17 @@ public final class LarkBot implements Bot {
         return messageIdOf(response);
     }
 
-    /** 对齐 lark.ts:280-285 updateCard（TS 不检查返回 code，无返回值消费）。 */
+    /** 不检查返回 code，无返回值消费。 */
     @Override
     public void updateCard(String messageId, JsonNode card) {
         api.patchMessage(messageId, card.toString());
     }
 
-    /** 对齐 lark.ts:287-294 subscribeToDocumentComments。 */
     @Override
     public void subscribeToDocumentComments() {
         requireSuccess(api.subscribeDocumentComments(), "订阅飞书文档评论事件失败");
     }
 
-    /** 对齐 lark.ts:296-326 replyToDocumentComment。 */
     @Override
     public void replyToDocumentComment(IncomingDocumentComment comment, String text) {
         ObjectNode textRun = MAPPER.createObjectNode();
@@ -95,10 +89,8 @@ public final class LarkBot implements Bot {
         requireSuccess(response, "回复飞书文档评论失败");
     }
 
-    /** 对齐 lark.ts:328-343 setDocumentCommentWorking。 */
     @Override
     public void setDocumentCommentWorking(IncomingDocumentComment comment, boolean active) {
-        // TS comment.replyId || await findRootCommentReplyId(...)：空串/null 走 list
         String replyId = comment.replyId();
         if (replyId == null || replyId.isEmpty()) {
             replyId = findRootCommentReplyId(comment);
@@ -108,7 +100,6 @@ public final class LarkBot implements Bot {
         requireSuccess(response, "更新飞书文档评论状态失败");
     }
 
-    /** 对齐 lark.ts:408-435 findRootCommentReplyId。 */
     private String findRootCommentReplyId(IncomingDocumentComment comment) {
         LarkResponse response = api.listFirstCommentReplyId(
                 comment.fileToken(), comment.commentId(), comment.fileType());
@@ -127,23 +118,18 @@ public final class LarkBot implements Bot {
         throw new LarkException("飞书文档评论缺少可添加表情的回复 ID");
     }
 
-    /** 对齐 lark.ts:345-356 downloadResource。 */
     @Override
     public String downloadResource(String messageId, String fileKey, String type,
                                    String saveDir, String fileName) throws IOException {
         DownloadedResource resource = api.getResource(messageId, fileKey, type);
         String extension = LarkPosts.resourceExtension(type, fileName, resource.contentType());
         Path savePath = Path.of(saveDir, fileKey + "." + extension);
-        Files.createDirectories(savePath.getParent()); // TS mkdir recursive
+        Files.createDirectories(savePath.getParent());
         Files.write(savePath, resource.body());
         return savePath.toString();
     }
 
-    /**
-     * 对齐 TS 的 truthy 判定 response.code && response.code !== 0
-     * （M4 Task 9 Review Focus 4）：code null 视为成功；
-     * msg 空串/null 时用 defaultMsg（TS response.msg || '…'）。
-     */
+    /** code 非 0 即失败；code 为 null 视成功（有的接口不回 code）。msg 空就用 defaultMsg。 */
     private void requireSuccess(LarkResponse response, String defaultMsg) {
         Integer code = response.code();
         if (code != null && code != 0) {
@@ -152,7 +138,7 @@ public final class LarkBot implements Bot {
         }
     }
 
-    /** TS res.data?.message_id：data 或 message_id 缺失/null → null。 */
+    /** data 或 message_id 缺失/null → null。 */
     private static String messageIdOf(LarkResponse response) {
         JsonNode data = response.data();
         if (data == null) {

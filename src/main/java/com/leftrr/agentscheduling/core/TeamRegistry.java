@@ -10,7 +10,7 @@ import java.util.stream.Collectors;
 
 /**
  * 团队名册：leader + 成员、团队上下文提示词、Skill 存在性检测。
- * 对应 TS 版 src/core/team-registry.ts。configs 用 LinkedHashMap 保持构造插入序。
+ * configs 用 LinkedHashMap 保持构造插入序。
  */
 public final class TeamRegistry {
     private final Map<String, BotRegistry.BotConfig> configs = new LinkedHashMap<>();
@@ -38,7 +38,7 @@ public final class TeamRegistry {
         return List.copyOf(configs.values());
     }
 
-    /** 未知 id 返回 null（对齐 TS `BotConfig | undefined`）。 */
+    /** 未知 id 返回 null。 */
     public BotRegistry.BotConfig get(String botId) {
         return configs.get(botId);
     }
@@ -68,9 +68,8 @@ public final class TeamRegistry {
     }
 
     /**
-     * 对齐 findMissingSkills()（TS async，本实现同步）。检测语义对齐 fs access：
-     * 路径存在（不要求是文件类型）即视为命中，不查权限可达性；
-     * 检测中的 IO 异常按「不存在」处理（对齐 TS catch 继续）。
+     * Skill 存在性检测（同步实现）。路径存在（不要求是文件类型）即视为命中，
+     * 不查权限可达性；检测中的 IO 异常按「不存在」处理。
      */
     public List<MissingSkill> findMissingSkills() {
         List<MissingSkill> missing = new ArrayList<>();
@@ -99,6 +98,6 @@ public final class TeamRegistry {
         return false;
     }
 
-    /** 对齐 TS MissingSkill 接口。 */
+    /** 缺失的 Skill（含已搜索的全部路径）。 */
     public record MissingSkill(String botId, String skill, List<String> searchedPaths) {}
 }

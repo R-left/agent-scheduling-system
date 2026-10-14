@@ -1,4 +1,6 @@
 package com.leftrr.agentscheduling.core;
+import com.leftrr.agentscheduling.util.JsonUtil;
+import com.leftrr.agentscheduling.util.IsoTimeUtil;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -17,8 +19,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 产品方案流程 JSON 持久化。对应 TS 版 src/core/product-spec-store.ts。
- * mutate = snapshot → 操作 → persist；persist 失败 → restore(snapshot) → 抛（对齐 TS）。
+ * 产品方案流程 JSON 持久化。
+ * mutate = snapshot → 操作 → persist；persist 失败 → restore(snapshot) → 抛。
  */
 public final class JsonProductSpecFlowStore extends ProductSpec.ProductSpecFlowStore {
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -40,7 +42,7 @@ public final class JsonProductSpecFlowStore extends ProductSpec.ProductSpecFlowS
         return mutate(() -> super.approve(token));
     }
 
-    /** 对齐 TS mutate(operation: () => T)；Supplier.get 不允许抛受检异常，故自定函数式接口。 */
+    /** 可抛受检异常的操作；Supplier.get 不允许抛受检异常，故自定函数式接口。 */
     @FunctionalInterface
     private interface IoSupplier<T> {
         T get() throws IOException;
@@ -59,7 +61,7 @@ public final class JsonProductSpecFlowStore extends ProductSpec.ProductSpecFlowS
     }
 
     private void persist() throws IOException {
-        JsonFormat.writeAtomic(filePath, JsonFormat.toJson(snapshot()) + "\n");
+        JsonUtil.writeAtomic(filePath, JsonUtil.toJson(snapshot()) + "\n");
     }
 
     private static List<ProductSpecFlow> loadFlows(String filePath) throws IOException {
@@ -71,8 +73,7 @@ public final class JsonProductSpecFlowStore extends ProductSpec.ProductSpecFlowS
         }
         JsonNode rows = MAPPER.readTree(content);
         if (rows == null || rows.isMissingNode()) {
-            // 对齐 TS：空文件 JSON.parse 抛 SyntaxError 直通（与非法 JSON 同为解析失败路径），
-            // 不走「产品方案状态文件格式错误」
+            // 空文件按解析失败处理（与非法 JSON 同一路径），不报「格式错误」
             throw new IOException("产品方案状态文件解析失败: " + filePath);
         }
         if (!rows.isArray()) {
@@ -88,7 +89,7 @@ public final class JsonProductSpecFlowStore extends ProductSpec.ProductSpecFlowS
         return flows;
     }
 
-    /** 对齐 ProductSpecFlowSchema.safeParse：非法行返回 null（调用方跳过）。 */
+    /** 解析单行流程记录：非法行返回 null（调用方跳过）。 */
     static ProductSpecFlow parseFlow(JsonNode row) {
         if (row == null || !row.isObject()) {
             return null;
@@ -128,7 +129,7 @@ public final class JsonProductSpecFlowStore extends ProductSpec.ProductSpecFlowS
         String approvedAt = null;
         if (row.has("approvedAt")) {
             JsonNode approvedNode = row.get("approvedAt");
-            approvedAt = approvedNode.isTextual() && IsoTime.isZodDateTime(approvedNode.asText())
+            approvedAt = approvedNode.isTextual() && IsoTimeUtil.isZodDateTime(approvedNode.asText())
                     ? approvedNode.asText()
                     : null;
             if (approvedAt == null) {
@@ -148,8 +149,8 @@ public final class JsonProductSpecFlowStore extends ProductSpec.ProductSpecFlowS
         String reportToBotId = min1Text(node, "reportToBotId");
         JsonNode round = node.get("round");
         JsonNode maxRounds = node.get("maxRounds");
-        // z.number().int().positive() 经 JSON.parse 接受浮点整值（1.0 同 1，JS Number 无整型区分）。
-        // Java 边界差：zod 可接受超过 int 范围的整数，但 Java int 会回绕，故拒绝并按既有非法行处理（返回 null 丢弃该行）。
+        // JSON 数值无整型区分，浮点整值（1.0 同 1）也接受。
+        // 超出 int 范围的整数会回绕，故拒绝并按既有非法行处理（返回 null 丢弃该行）。
         if (taskId == null || fromBotId == null || reportToBotId == null
                 || !positiveIntValue(round) || !positiveIntValue(maxRounds)) {
             return null;
@@ -158,7 +159,7 @@ public final class JsonProductSpecFlowStore extends ProductSpec.ProductSpecFlowS
                 (int) round.asLong(), (int) maxRounds.asLong());
     }
 
-    /** 数值为整数且落在 1..Integer.MAX_VALUE（对齐 z.number().int().positive() + Java int 上界）。 */
+    /** 数值为整数且落在 1..Integer.MAX_VALUE。 */
     private static boolean positiveIntValue(JsonNode value) {
         return value != null && value.canConvertToExactIntegral()
                 && value.asLong() >= 1 && value.asLong() <= Integer.MAX_VALUE;

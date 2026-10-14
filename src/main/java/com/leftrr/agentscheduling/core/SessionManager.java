@@ -1,20 +1,22 @@
 package com.leftrr.agentscheduling.core;
+import com.leftrr.agentscheduling.util.IsoTimeUtil;
 
-import com.leftrr.agentscheduling.cli.CliId;
-
+import com.leftrr.agentscheduling.dto.cli.CliId;
+import com.leftrr.agentscheduling.dto.core.MessageAddress;
+import com.leftrr.agentscheduling.dto.core.ResolvedSession;
+import com.leftrr.agentscheduling.dto.core.SessionStatus;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.Supplier;
-import java.nio.file.Path;
 
 /**
- * 话题会话状态机：(botId, chatId, threadId) → Session。对应 TS 版 src/core/session-manager.ts。
- * now/createId/store 均可注入（测试用）；now 默认输出 ISO 毫秒字符串（对齐 toISOString）。
- * persist 失败时回滚内存态再透传异常（对齐 TS 的 try/catch 回删/回写）。
+ * 话题会话状态机：(botId, chatId, threadId) → Session。
+ * now/createId/store 可注入。持久化失败时先回滚内存态再抛异常。
  */
 public final class SessionManager {
     private static final Map<SessionStatus, List<SessionStatus>> ALLOWED_TRANSITIONS = Map.of(
@@ -29,7 +31,7 @@ public final class SessionManager {
     private final SessionStore store;
 
     public SessionManager() {
-        this(IsoTime::now, () -> UUID.randomUUID().toString(), null);
+        this(IsoTimeUtil::now, () -> UUID.randomUUID().toString(), null);
     }
 
     public SessionManager(Supplier<String> now, Supplier<String> createId, SessionStore store) {
@@ -38,9 +40,9 @@ public final class SessionManager {
         this.store = store;
     }
 
-    /** 对齐 static open()：从 store 恢复既有会话。 */
+    /** 从 store 恢复既有会话。 */
     public static SessionManager open(SessionStore store) throws IOException {
-        return open(IsoTime::now, () -> UUID.randomUUID().toString(), store);
+        return open(IsoTimeUtil::now, () -> UUID.randomUUID().toString(), store);
     }
 
     public static SessionManager open(Supplier<String> now, Supplier<String> createId,
@@ -59,7 +61,7 @@ public final class SessionManager {
         return sessions.size();
     }
 
-    /** 按 sessionId 线性扫描（对齐 TS find），未知返回 null。 */
+    /** 按 sessionId 线性扫描，未知返回 null。 */
     public Session get(String sessionId) {
         for (Session session : sessions.values()) {
             if (session.id().equals(sessionId)) {
@@ -138,12 +140,12 @@ public final class SessionManager {
             throw new IllegalArgumentException("工作目录不能为空");
         }
         if (current.workspaceDir().equals(workspaceDir)) {
-            return current; // 对齐 TS：同值直接返回，不触发持久化
+            return current; // 同值直接返回，不触发持久化
         }
         return replaceTracked(current, current.withWorkspaceDir(workspaceDir, now.get()));
     }
 
-    /** 三处更新共用的「写入 + 失败回滚」骨架（对齐 TS 各方法重复的 try/catch）。 */
+    /** 三处更新共用的「写入 + 失败回滚」骨架。 */
     private Session replaceTracked(Session current, Session updated) throws IOException {
         String key = sessionKey(updated.botId(), updated.chatId(), updated.threadId());
         sessions.put(key, updated);
@@ -164,7 +166,7 @@ public final class SessionManager {
         }
     }
 
-    /** 对齐 topicIdOf()：threadId || rootId || messageId（空串视为 falsy）。 */
+    /** 优先 threadId，其次 rootId，最后 messageId（空串视为缺失）。 */
     static String topicIdOf(MessageAddress message) {
         if (message.threadId() != null && !message.threadId().isEmpty()) {
             return message.threadId();

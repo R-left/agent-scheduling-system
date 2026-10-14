@@ -1,8 +1,8 @@
 package com.leftrr.agentscheduling.core;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.leftrr.agentscheduling.cli.CliRunResult;
-import com.leftrr.agentscheduling.cli.JsText;
+import com.leftrr.agentscheduling.dto.cli.CliRunResult;
+import com.leftrr.agentscheduling.util.StringUtil;
 
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -16,11 +16,8 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
- * 需求澄清流程。对应 TS 版 src/core/clarification.ts。
- * zod schema 用 JsonNode 手工校验表达（设计裁决 1）：safeParse → parseRequest 返回 null 不抛。
- * TS superRefine 的自定义消息（'同一道问题的选项 ID 不能重复'、'同一份澄清请求的问题 ID 不能重复'、
- * '推荐项必须指向当前问题中的选项'）在 TS 运行时经 safeParse 被丢弃、不外显，Java 侧只复刻判定，
- * 消息保留于注释备查。
+ * 需求澄清流程。parseRequest 非法返回 null 不抛。
+ * 行内注释里的自定义校验消息运行时不外显，留着备查。
  */
 public final class Clarification {
     public static final String CLARIFICATION_TOOL_NAME = "request_clarification";
@@ -33,7 +30,7 @@ public final class Clarification {
     /** recommendedOptionId null 表示可选缺省。 */
     public record Question(String id, String prompt, List<Option> options, String recommendedOptionId) {}
 
-    /** 对齐 ClarificationRequest（z.infer，含 default 填充后的形态）。 */
+    /** 澄清请求（title 缺省填充后的形态）。 */
     public record ClarificationRequest(String title, String intro, List<Question> questions) {}
 
     public enum AnswerSource {
@@ -53,7 +50,7 @@ public final class Clarification {
 
     public record ClarificationAnswer(String questionId, String prompt, String answer, AnswerSource source) {}
 
-    /** 对齐 CreateClarificationFlowOptions；ownerUnionId/cardMessageId/collaboration null 表示 undefined。 */
+    /** 创建澄清流程的选项；ownerUnionId/cardMessageId/collaboration null 表示缺省。 */
     public record CreateFlowOptions(
             String taskId,
             String botId,
@@ -66,10 +63,10 @@ public final class Clarification {
             boolean replyInThread,
             ClarificationRequest request) {}
 
-    /** 对齐 answer()/answerWithRecommendation() 的返回形态。 */
+    /** 作答结果：流程 + 是否全部答完。 */
     public record AnswerResult(ClarificationFlow flow, boolean complete) {}
 
-    /** 可变流程对象（answers/currentIndex 原地推进，对齐 TS）。仅由本文件内的 store 操作可变字段。 */
+    /** 可变流程对象（answers/currentIndex 原地推进）。仅由本文件内的 store 操作可变字段。 */
     public static final class ClarificationFlow {
         private final String token;
         private final String taskId;
@@ -114,28 +111,7 @@ public final class Clarification {
         public List<ClarificationAnswer> answers() { return List.copyOf(answers); }
     }
 
-    /**
-     * 仅供测试构造任意状态的 flow（M4 增量修改）：绕过 store 与请求校验，
-     * 以给定 (token, request, currentIndex, answers) 组合直接组装 ClarificationFlow，
-     * 供 im 包等跨包测试夹具使用。生产代码不得调用。
-     *
-     * <p>task/bot/session/owner 等身份字段填入固定占位值（卡片构造不消费它们）；
-     * answers 为 null 表示空答案列表。</p>
-     */
-    public static ClarificationFlow flowsForTest(String token, ClarificationRequest request,
-            int currentIndex, List<ClarificationAnswer> answers) {
-        CreateFlowOptions options = new CreateFlowOptions(
-                "test-task", "test-bot", "test-session", "ou_test", null, null,
-                null, null, true, request);
-        ClarificationFlow flow = new ClarificationFlow(token, options);
-        flow.currentIndex = currentIndex;
-        if (answers != null) {
-            flow.answers.addAll(answers);
-        }
-        return flow;
-    }
-
-    /** 对齐 ClarificationRequestSchema.safeParse（含 zod default 与 superRefine 判定）。 */
+    /** 解析澄清请求（含 title 缺省与全部判定规则）：非法返回 null。 */
     public static ClarificationRequest parseRequest(JsonNode input) {
         if (input == null || !input.isObject()) {
             return null;
@@ -143,7 +119,7 @@ public final class Clarification {
         String title;
         JsonNode titleNode = input.get("title");
         if (titleNode == null) {
-            title = "需求澄清"; // zod default
+            title = "需求澄清";
         } else {
             title = trimmedText(titleNode);
             if (title == null || title.isEmpty() || title.length() > 80) {
@@ -249,14 +225,14 @@ public final class Clarification {
         return null;
     }
 
-    /** 对齐 isClarificationOwner(flow, operator)：双方 union 均为非空串时比 union，否则比 openId（=== 语义）。 */
+    /** 双方 union 均为非空串时比 union，否则比 openId。 */
     public static boolean isClarificationOwner(String ownerOpenId, String ownerUnionId,
             String operatorOpenId, String operatorUnionId) {
         if (ownerUnionId != null && !ownerUnionId.isEmpty()
                 && operatorUnionId != null && !operatorUnionId.isEmpty()) {
             return ownerUnionId.equals(operatorUnionId);
         }
-        // 对齐 TS `===`：null === null 亦为 true，不能用 != null && equals 短路
+        // null 与 null 亦视为相等，不能用 != null && equals 短路
         return ownerOpenId == null ? operatorOpenId == null
                 : ownerOpenId.equals(operatorOpenId);
     }
@@ -299,11 +275,11 @@ public final class Clarification {
                 .collect(Collectors.joining("\n\n"));
     }
 
-    /** 内存流程库（TS ClarificationFlowStore；重启即失）。 */
+    /** 内存流程库（重启即失）。 */
     public static final class ClarificationFlowStore {
         private final Map<String, ClarificationFlow> flows = new LinkedHashMap<>();
 
-        /** 同 (taskId, botId) 的旧流程全部删除（对齐 TS create 的全量清理；边迭代边删须用 Iterator.remove）。 */
+        /** 同 (taskId, botId) 的旧流程全部删除；边迭代边删须用 Iterator.remove。 */
         public ClarificationFlow create(CreateFlowOptions options) {
             for (Iterator<Map.Entry<String, ClarificationFlow>> iterator =
                     flows.entrySet().iterator(); iterator.hasNext(); ) {
@@ -335,7 +311,7 @@ public final class Clarification {
             flows.remove(token);
         }
 
-        /** 对齐 answer(token, questionId, answer)：source 默认 user。 */
+        /** 作答一题（source 默认 user）。 */
         public AnswerResult answer(String token, String questionId, String answer) {
             return answer(token, questionId, answer, AnswerSource.USER);
         }
@@ -343,7 +319,7 @@ public final class Clarification {
         public AnswerResult answer(String token, String questionId, String answer, AnswerSource source) {
             ClarificationFlow flow = flows.get(token);
             Question question = flow == null ? null : currentQuestion(flow);
-            String normalized = answer == null ? "" : JsText.jsTrim(answer);
+            String normalized = answer == null ? "" : StringUtil.trim(answer);
             if (flow == null || question == null || !question.id().equals(questionId)
                     || normalized.isEmpty()) {
                 return null;
@@ -355,7 +331,7 @@ public final class Clarification {
                     flow.currentIndex >= flow.request().questions().size());
         }
 
-        /** 对齐 answerWithRecommendation(token, allRemaining)：逐题采用推荐项（无则首个 option）。 */
+        /** 逐题采用推荐项作答（allRemaining 时连续答完剩余各题）。 */
         public AnswerResult answerWithRecommendation(String token, boolean allRemaining) {
             ClarificationFlow flow = flows.get(token);
             if (flow == null) {
@@ -375,7 +351,7 @@ public final class Clarification {
                     }
                 }
                 if (recommended == null && !question.options().isEmpty()) {
-                    recommended = question.options().get(0); // 对齐 ?? question.options[0]
+                    recommended = question.options().get(0); // 无推荐项时回退首个 option
                 }
                 if (recommended == null) {
                     return null;
@@ -401,6 +377,6 @@ public final class Clarification {
         if (node == null || !node.isTextual()) {
             return null;
         }
-        return JsText.jsTrim(node.asText());
+        return StringUtil.trim(node.asText());
     }
 }

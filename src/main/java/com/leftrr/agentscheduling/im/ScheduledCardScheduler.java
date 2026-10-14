@@ -6,14 +6,9 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 /**
- * {@link CardScheduler} 的生产实现：进程级单例 daemon 单线程
- * ScheduledExecutorService，一次性 delay 调度（对齐 TS setTimeout/clearTimeout）。
- *
- * <p>进程生命周期：不提供 shutdown——TS 版的 timer 线程同为进程级常驻；
- * 线程设为 daemon，不阻止 JVM 正常退出（对齐 TS heartbeat.unref() 的语义）。
- *
- * <p>cancel 包装 {@link ScheduledFuture#cancel(boolean)}（传 false：不中断
- * 已开始执行的任务），Future.cancel 天然幂等。
+ * CardScheduler 的生产实现：进程级单例 daemon 单线程调度器。
+ * 不提供 shutdown——线程是 daemon，不阻止 JVM 正常退出。
+ * cancel 走 future.cancel(false)：不中断已开始执行的任务，天然幂等。
  */
 public final class ScheduledCardScheduler implements CardScheduler {
 

@@ -1,11 +1,12 @@
 package com.leftrr.agentscheduling.core;
 
+import com.leftrr.agentscheduling.dto.core.TopicAddress;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 
-/** 话题任务 ID。对应 TS 版 src/core/topic-task.ts。 */
+/** 话题任务 ID。 */
 public final class TopicTask {
     private TopicTask() {
     }

@@ -5,26 +5,23 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.lark.oapi.core.response.RawResponse;
 import com.lark.oapi.core.token.AccessTokenType;
+import com.leftrr.agentscheduling.dto.im.DownloadedResource;
+import com.leftrr.agentscheduling.dto.im.LarkResponse;
 
 /**
- * LarkApi 的 oapi-sdk 2.4.7 raw 通道薄壳：client.post/patch/get/put(url, bodyJson,
- * AccessTokenType.Tenant) + RawResponse.getBody()。本类不写单元测试，
- * <b>LarkProbe 冒烟验证（需 .env 凭证，M7 端到端）</b>。
+ * LarkApi 的 oapi-sdk 2.4.7 薄壳：全部走 client.post/patch/get(url, body,
+ * AccessTokenType.Tenant)。不做单测，由 LarkProbe 冒烟验证。
  *
- * <p>URL 依据（2026-10-13 核对，未做真实调用）：前四类与 Java SDK jar 内资源类
- * URL 常量逐一比对（unzip + javap 提取）——im.v1 reply(/messages/:id/reply)、
- * patch(/messages/:id)、messageResource(/messages/:id/resources/:file_key)、
- * drive.v1 replies(/drive/v1/files/:file_token/comments/:comment_id/replies)。
+ * <p>URL 依据：im.v1 reply/patch、messageResource、drive.v1 replies 与 SDK jar
+ * 内资源类常量逐一比对得出。subscribeDocumentComments 和 updateCommentReaction
+ * 在 2.4.7 没有对应资源类，URL 照 &#64;larksuiteoapi/node-sdk 1.71.1 源码核对；
+ * 后者是 <b>POST 不是 PUT</b>。</p>
  *
- * <p>以下两条在 Java SDK 2.4.7 中无对应资源类，URL 依 TS 侧
- * &#64;larksuiteoapi/node-sdk 1.71.1 源码（本项目 TS 版所用版本）核对：
- * <ul>
- *   <li>subscribeDocumentComments → POST /open-apis/drive/v1/user/subscription
- *       （body {event_type}，无 path 参数，与 TS drive.v1.user.subscription 一致）</li>
- *   <li>updateCommentReaction → POST /open-apis/drive/v2/files/:file_token/comments/reaction?file_type=…
- *       （body {action, reply_id, reaction_type}；<b>POST 而非 PUT</b>，
- *       brief Step 2 曾推断 raw put + /comment_reactions，以 Node SDK 源码实测为准）</li>
- * </ul>
+ * <p>三个真机踩过的坑：① bot/v3/info 无 data 信封（见 fetchBotInfo）；② OkHttpTransport
+ * 对 body 无条件 Gson.toJson，String 会被二次编码（Bad Request）；③ SDK 的 parseInput
+ * 对入参对象逐字段 setAccessible 找 @Body 注解——String/Map 都会碰 JDK 内部字段
+ * （JDK 9+ 模块封锁）。故 body 一律经 gsonBody 包成 {@link GsonBody} 壳：
+ * 反射只发生在自家类上，@Body 字段原样透传给 Gson。</p>
  */
 public final class OapiLarkApi implements LarkApi {
 
@@ -43,12 +40,13 @@ public final class OapiLarkApi implements LarkApi {
     @Override
     public LarkResponse fetchBotInfo() {
         String url = "/open-apis/bot/v3/info";
-        return call(url, () -> client.get(url, null, AccessTokenType.Tenant));
+        // bot/v3/info 是特殊 v3 接口：响应体没有 data 信封，bot 直接挂根节点，
+        // 把根节点整体当 data 交给上层
+        return call(url, () -> client.get(url, null, AccessTokenType.Tenant), true);
     }
 
     @Override
     public LarkResponse replyMessage(String messageId, String msgType, String contentJson, boolean replyInThread) {
-        // TS data: {msg_type, content: JSON.stringify(…), reply_in_thread?}：content 为 JSON 字符串
         ObjectNode body = MAPPER.createObjectNode();
         body.put("msg_type", msgType);
         body.put("content", contentJson);
@@ -56,7 +54,7 @@ public final class OapiLarkApi implements LarkApi {
             body.put("reply_in_thread", true);
         }
         String url = "/open-apis/im/v1/messages/" + messageId + "/reply";
-        return call(url, () -> client.post(url, body.toString(), AccessTokenType.Tenant));
+        return call(url, () -> client.post(url, gsonBody(body), AccessTokenType.Tenant));
     }
 
     @Override
@@ -64,7 +62,7 @@ public final class OapiLarkApi implements LarkApi {
         ObjectNode body = MAPPER.createObjectNode();
         body.put("content", contentJson);
         String url = "/open-apis/im/v1/messages/" + messageId;
-        return call(url, () -> client.patch(url, body.toString(), AccessTokenType.Tenant));
+        return call(url, () -> client.patch(url, gsonBody(body), AccessTokenType.Tenant));
     }
 
     @Override
@@ -72,15 +70,16 @@ public final class OapiLarkApi implements LarkApi {
         ObjectNode body = MAPPER.createObjectNode();
         body.put("event_type", "drive.notice.comment_add_v1");
         String url = "/open-apis/drive/v1/user/subscription";
-        return call(url, () -> client.post(url, body.toString(), AccessTokenType.Tenant));
+        return call(url, () -> client.post(url, gsonBody(body), AccessTokenType.Tenant));
     }
 
     @Override
     public LarkResponse createCommentReply(String fileToken, String commentId, String fileType, String contentJson) {
-        // TS data: { content: {elements:[…]} }：content 是对象，此处解析 contentJson 后包裹
+        // 这里的 content 是对象不是字符串，要先解析再包一层
         String url = "/open-apis/drive/v1/files/" + fileToken + "/comments/" + commentId + "/replies"
                 + "?file_type=" + fileType + "&user_id_type=open_id";
-        return call(url, () -> client.post(url, wrapContent(contentJson), AccessTokenType.Tenant));
+        ObjectNode body = wrapContent(contentJson);
+        return call(url, () -> client.post(url, gsonBody(body), AccessTokenType.Tenant));
     }
 
     @Override
@@ -97,7 +96,7 @@ public final class OapiLarkApi implements LarkApi {
         body.put("reply_id", replyId);
         body.put("reaction_type", TYPING_REACTION_TYPE);
         String url = "/open-apis/drive/v2/files/" + fileToken + "/comments/reaction?file_type=" + fileType;
-        return call(url, () -> client.post(url, body.toString(), AccessTokenType.Tenant));
+        return call(url, () -> client.post(url, gsonBody(body), AccessTokenType.Tenant));
     }
 
     @Override
@@ -111,12 +110,26 @@ public final class OapiLarkApi implements LarkApi {
         }
     }
 
-    /** 评论回复 body：{content: <contentJson 解析结果>}（TS content 为对象）。 */
-    private static String wrapContent(String contentJson) {
+    /** 请求体壳：Jackson 树转 Map/List 后包一层 @Body，绕开 SDK 反射与 String 二次编码（见类注释）。 */
+    private static Object gsonBody(JsonNode node) {
+        return new GsonBody(MAPPER.convertValue(node, Object.class));
+    }
+
+    /** parseInput 只反射这个类的字段（无 JDK 内部结构），@Body 字段值即真实请求体。 */
+    private static final class GsonBody {
+        @com.lark.oapi.core.annotation.Body
+        final Object body;
+
+        GsonBody(Object body) {
+            this.body = body;
+        }
+    }
+
+    private static ObjectNode wrapContent(String contentJson) {
         try {
             ObjectNode body = MAPPER.createObjectNode();
             body.set("content", MAPPER.readTree(contentJson));
-            return body.toString();
+            return body;
         } catch (Exception e) {
             throw new LarkException("评论回复 content 非法 JSON", e);
         }
@@ -127,17 +140,21 @@ public final class OapiLarkApi implements LarkApi {
     }
 
     private LarkResponse call(String url, RawCall raw) {
+        return call(url, raw, false);
+    }
+
+    private LarkResponse call(String url, RawCall raw, boolean rootAsData) {
         RawResponse response;
         try {
             response = raw.execute();
         } catch (Exception e) {
             throw new LarkException("调用飞书接口失败: " + url, e);
         }
-        return toLarkResponse(response);
+        return toLarkResponse(response, rootAsData);
     }
 
-    /** 飞书 REST 信封 {code, msg, data} → LarkResponse；code 缺失 → null（视为成功）。 */
-    private static LarkResponse toLarkResponse(RawResponse response) {
+    /** 飞书 REST 信封 {code, msg, data} → LarkResponse；code 缺失 → null，按成功处理。 */
+    private static LarkResponse toLarkResponse(RawResponse response, boolean rootAsData) {
         byte[] body = response.getBody();
         if (body == null || body.length == 0) {
             return new LarkResponse(null, null, null);
@@ -152,6 +169,9 @@ public final class OapiLarkApi implements LarkApi {
         Integer code = codeNode.isNumber() ? codeNode.asInt() : null;
         JsonNode msgNode = root.path("msg");
         String msg = msgNode.isMissingNode() || msgNode.isNull() ? null : msgNode.asText();
+        if (rootAsData) {
+            return new LarkResponse(code, msg, root);
+        }
         JsonNode dataNode = root.path("data");
         JsonNode data = dataNode.isMissingNode() || dataNode.isNull() ? null : dataNode;
         return new LarkResponse(code, msg, data);

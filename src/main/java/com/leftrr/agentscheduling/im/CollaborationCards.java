@@ -5,17 +5,10 @@ import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 /**
- * 对齐 TS 版 src/im/card.ts 的协作卡（M4 Task 7）：buildCollaborationCard
- * （card.ts:686-769），及 card.ts:50-60 CollaborationCardOptions。
- *
- * <p>卡片 JSON 用 ObjectNode 手工构造，put 顺序 = TS 对象字面量键序（设计裁决 1）。
- * expectedOutput null = TS undefined；TS 真值检查（expectedOutput ?）落为
- * 非 null 且非空串。config.summary 与 header subtitle 的 objective / 成员名
- * 为 TS 模板直接插值，不经 escapeFeishuMarkdown（card.ts:699/706）。</p>
+ * 协作卡。注意 objective 和成员名是模板直接插值，不过 escapeFeishuMarkdown。
  */
 public final class CollaborationCards {
 
-    /** card.ts:50-60 CollaborationCardOptions；expectedOutput null = TS undefined。 */
     public record CollaborationCardOptions(
             String senderName,
             String targetName,
@@ -30,8 +23,6 @@ public final class CollaborationCards {
     private static final JsonNodeFactory FACTORY = JsonNodeFactory.instance;
 
     private CollaborationCards() {}
-
-    // ---- card.ts:686-769 buildCollaborationCard ----
 
     public static ObjectNode buildCollaborationCard(CollaborationCardOptions options) {
         boolean isLastRound = options.round() >= options.maxRounds();
@@ -62,7 +53,6 @@ public final class CollaborationCards {
                 + CardText.escapeFeishuMarkdown(options.objective()) + "**"));
         elements.add(columnSet(options));
         elements.add(collapsiblePanel(options.instruction()));
-        // TS: ...(options.expectedOutput ? [hr, markdown] : [])（真值检查）
         if (options.expectedOutput() != null && !options.expectedOutput().isEmpty()) {
             elements.add(hr());
             elements.add(markdown("**期望产出**\n"
@@ -83,7 +73,7 @@ public final class CollaborationCards {
         return card;
     }
 
-    /** card.ts:717-741 column_set（项目 / 结果交给 两列，weight 3:2）。 */
+    /** 左右两列（项目 / 结果交给），weight 3:2。 */
     private static ObjectNode columnSet(CollaborationCardOptions options) {
         ObjectNode project = markdown("**项目**\n"
                 + CardText.escapeFeishuMarkdown(options.workspaceName()));
@@ -112,7 +102,6 @@ public final class CollaborationCards {
         return columnSet;
     }
 
-    /** card.ts:742-754 collapsible_panel（查看任务说明，内容 = escape(markdownPreview(instruction, 6000))）。 */
     private static ObjectNode collapsiblePanel(String instruction) {
         ObjectNode content = markdown(CardText.escapeFeishuMarkdown(
                 CardText.markdownPreview(instruction, CardText.MAX_CARD_ANSWER_LENGTH)));
@@ -134,7 +123,6 @@ public final class CollaborationCards {
         return array;
     }
 
-    /** {tag:'markdown', content}（card.ts 键序）。 */
     private static ObjectNode markdown(String content) {
         ObjectNode node = FACTORY.objectNode();
         node.put("tag", "markdown");

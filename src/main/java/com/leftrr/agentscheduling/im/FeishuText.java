@@ -1,11 +1,11 @@
 package com.leftrr.agentscheduling.im;
 
-/** 对齐 TS 版 src/im/lark.ts 的文本限额常量与 fitFeishuText。
- * 长度与切片按 Unicode code point 计（TS Array.from 语义），见计划设计裁决 5。 */
+/** 飞书文本限额。
+ * 长度与切片按 code point，不劈代理对——和 CardText 的 code unit 口径不同，别混。 */
 public final class FeishuText {
-    public static final int FEISHU_TEXT_LIMIT = 3_000;      // lark.ts:54
-    public static final int FEISHU_MENTION_LIMIT = 1_200;   // lark.ts:55
-    public static final int FEISHU_COMMENT_LIMIT = 1_000;   // lark.ts:56
+    public static final int FEISHU_TEXT_LIMIT = 3_000;
+    public static final int FEISHU_MENTION_LIMIT = 1_200;
+    public static final int FEISHU_COMMENT_LIMIT = 1_000;
 
     static final String TRUNCATE_SUFFIX = "\n\n（内容过长，已截断。详细内容请写入文档或工作区文件。）";
 
@@ -23,7 +23,7 @@ public final class FeishuText {
         return text.substring(begin, end);
     }
 
-    /** 对齐 lark.ts:58-64。 */
+    /** 超出 maxLength 时保留头部并追加截断提示。 */
     public static String fitFeishuText(String text, int maxLength) {
         int length = codePointLength(text);
         if (length <= maxLength) return text;

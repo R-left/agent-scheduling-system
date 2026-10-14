@@ -1,7 +1,10 @@
 package com.leftrr.agentscheduling.cli;
+import com.leftrr.agentscheduling.util.StringUtil;
 
 import com.leftrr.agentscheduling.core.CancellationToken;
-
+import com.leftrr.agentscheduling.dto.cli.CliEvent;
+import com.leftrr.agentscheduling.dto.cli.CliRunResult;
+import com.leftrr.agentscheduling.dto.cli.CliRunStats;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
@@ -19,12 +22,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 /**
- * 通用 CLI 运行器，对齐 TS runner.ts runCli()。
- *
- * 形态差异（语义等价，见计划设计裁决 1）：TS 基于 Promise 回调拼装；本实现阻塞调用线程
- * （架构约定由虚拟线程调用）直到子进程退出。stderr 收集与 stdin 写入各用一条虚拟线程，
- * 超时由守护调度线程触发 killCli。取消用 M1 CancellationToken（per-run 创建）；
- * 取消监听器只负责杀进程树，不读 ActiveRun.cancelMode（M2 前置事项）。
+ * 通用 CLI 运行器：阻塞调用线程直到子进程退出（调用方须是虚拟线程）。
+ * stderr 收集与 stdin 写入各占一条虚拟线程，超时由守护调度线程触发杀进程；
+ * 取消监听器只负责杀进程树。
  */
 public final class CliRunner {
     public static final long DEFAULT_TIMEOUT_MS = 2L * 60 * 60 * 1000;
@@ -41,9 +41,7 @@ public final class CliRunner {
             Consumer<CliEvent> onEvent) {}
 
     public static CliRunResult run(Options o) throws IOException, InterruptedException {
-        long timeoutMs = o.timeoutMs() != null
-                ? o.timeoutMs()
-                : withDefault(CliTimeouts.fromEnv(o.adapter().id()));
+        long timeoutMs = o.timeoutMs() != null ? o.timeoutMs() : DEFAULT_TIMEOUT_MS;
         CliPromptInput promptInput = CliPromptInput.current();
         boolean useStdin = promptInput == CliPromptInput.STDIN;
         List<String> args = o.sessionId() != null
@@ -56,7 +54,7 @@ public final class CliRunner {
 
         Process child = CliProcess.spawn(o.adapter().command(), args, o.cwd());
 
-        // stdin：写完即收口（TS child.stdin.end()）。虚拟线程写入，避免大 prompt 塞满管道死锁。
+        // stdin：写完即收口。虚拟线程写入，避免大 prompt 塞满管道死锁。
         Thread stdinWriter = Thread.ofVirtual().start(() -> {
             try (OutputStream stdin = child.getOutputStream()) {
                 if (useStdin) {
@@ -67,7 +65,7 @@ public final class CliRunner {
             }
         });
 
-        // TS 的 spawn signal 只杀直接子进程，额外 abort 监听用 killCli 连进程树清。
+        // 取消时须连进程树一起清，只杀外壳会留孤儿进程。
         CancellationToken.ListenerRegistration cancelReg = o.cancellation() == null
                 ? null
                 : o.cancellation().register(() -> CliProcess.kill(child));
@@ -104,7 +102,6 @@ public final class CliRunner {
                         if (o.onEvent() != null) {
                             o.onEvent().accept(event);
                         }
-                        // 任何携带 sessionId 的事件都更新观测（TS runner.ts:88，含 error/result）
                         observedSessionId = observeSessionId(observedSessionId, event);
                         if (event instanceof CliEvent.ErrorEvent e) {
                             resultError = e.message();
@@ -143,13 +140,12 @@ public final class CliRunner {
             stdinWriter.join();
             stderrPump.join();
         } catch (InterruptedException e) {
-            // 中断路径：先杀进程树再恢复中断标记，防孤儿；中断语义向调用方透传
+            // 先杀进程树防孤儿，再恢复中断标记往上传
             CliProcess.kill(child);
             Thread.currentThread().interrupt();
             throw e;
         } finally {
-            // 所有路径统一收尾：调度器关闭 + 取消注册移除；parseEvents/onEvent 抛
-            // RuntimeException 等异常路径下子进程仍存活时连树杀掉，防孤儿泄漏
+            // 所有路径统一收尾；parseEvents/onEvent 抛异常时子进程可能还活着，连树杀掉
             timer.cancel(false);
             scheduler.shutdownNow();
             if (cancelReg != null) {
@@ -160,7 +156,7 @@ public final class CliRunner {
             }
         }
 
-        // 终态判定优先级对齐 TS：timeout → cancelled → error 事件 → 退出码 → 无结果
+        // 终态判定优先级：timeout → cancelled → error 事件 → 退出码 → 无结果
         if (timedOut.get()) {
             throw new CliExecutionException(o.adapter().displayName() + " 执行超时");
         }
@@ -171,7 +167,7 @@ public final class CliRunner {
             throw new CliExecutionException(resultError);
         }
         if (code != 0) {
-            String stderrText = JsText.jsTrim(stderr.toString());
+            String stderrText = StringUtil.trim(stderr.toString());
             throw new CliExecutionException(!stderrText.isEmpty()
                     ? stderrText
                     : o.adapter().displayName() + " 退出，状态码 " + code);
@@ -190,7 +186,7 @@ public final class CliRunner {
     }
 
     /**
-     * TS runner.ts:88 —— 任何携带 sessionId 的事件（session/error/result）都更新观测值，
+     * 任何携带 sessionId 的事件（session/error/result）都更新观测值，
      * sessionId 为 null 的事件不覆盖现有观测。
      */
     static String observeSessionId(String current, CliEvent event) {
@@ -206,10 +202,6 @@ public final class CliRunner {
         return current;
     }
 
-    private static long withDefault(Long timeoutMs) {
-        return timeoutMs != null ? timeoutMs : DEFAULT_TIMEOUT_MS;
-    }
-
     private static CliRunResult withStats(CliRunResult result, CliRunStats stats) {
         return new CliRunResult(result.answer(), result.sessionId(), stats, result.toolCalls());
     }
@@ -220,7 +212,7 @@ public final class CliRunner {
                 byte[] buffer = new byte[4096];
                 int read;
                 while ((read = in.read(buffer)) != -1) {
-                    synchronized (target) {  // 仅拼接，短暂持锁不构成 pin 风险；如评审质疑可换 ConcurrentHashMap 分片
+                    synchronized (target) {  // 仅拼接，持锁极短，不会钉住载体线程
                         target.append(new String(buffer, 0, read, StandardCharsets.UTF_8));
                     }
                 }

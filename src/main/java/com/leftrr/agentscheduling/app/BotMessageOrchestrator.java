@@ -2,48 +2,46 @@ package com.leftrr.agentscheduling.app;
 
 import com.leftrr.agentscheduling.cli.CliAdapter;
 import com.leftrr.agentscheduling.cli.CliAdapterRegistry;
-import com.leftrr.agentscheduling.cli.CliEvent;
-import com.leftrr.agentscheduling.cli.CliId;
-import com.leftrr.agentscheduling.cli.CliRunResult;
 import com.leftrr.agentscheduling.cli.NativeCompact;
 import com.leftrr.agentscheduling.core.ActiveRun;
+import com.leftrr.agentscheduling.core.AppPaths;
 import com.leftrr.agentscheduling.core.BotRegistry;
 import com.leftrr.agentscheduling.core.CancellationToken;
-import com.leftrr.agentscheduling.core.CancelMode;
 import com.leftrr.agentscheduling.core.Clarification;
-import com.leftrr.agentscheduling.core.CliRequest;
 import com.leftrr.agentscheduling.core.Collaboration;
 import com.leftrr.agentscheduling.core.CommandParser;
-import com.leftrr.agentscheduling.core.MessageAddress;
-import com.leftrr.agentscheduling.core.ProductDeliveryMode;
 import com.leftrr.agentscheduling.core.ProductSpec;
-import com.leftrr.agentscheduling.core.ResolvedSession;
 import com.leftrr.agentscheduling.core.Session;
-import com.leftrr.agentscheduling.core.SessionStatus;
-import com.leftrr.agentscheduling.core.SlashCommand;
-import com.leftrr.agentscheduling.core.TaskProgressSnapshot;
 import com.leftrr.agentscheduling.core.TaskProgressTracker;
-import com.leftrr.agentscheduling.core.TopicAddress;
 import com.leftrr.agentscheduling.core.TopicTask;
 import com.leftrr.agentscheduling.core.Workspace;
+import com.leftrr.agentscheduling.dto.app.BotRuntime;
+import com.leftrr.agentscheduling.dto.cli.CliEvent;
+import com.leftrr.agentscheduling.dto.cli.CliId;
+import com.leftrr.agentscheduling.dto.cli.CliRunResult;
+import com.leftrr.agentscheduling.dto.core.CancelMode;
+import com.leftrr.agentscheduling.dto.core.CliRequest;
+import com.leftrr.agentscheduling.dto.core.MessageAddress;
+import com.leftrr.agentscheduling.dto.core.ProductDeliveryMode;
+import com.leftrr.agentscheduling.dto.core.ResolvedSession;
+import com.leftrr.agentscheduling.dto.core.SessionStatus;
+import com.leftrr.agentscheduling.dto.core.SlashCommand;
+import com.leftrr.agentscheduling.dto.core.TaskProgressSnapshot;
+import com.leftrr.agentscheduling.dto.core.TopicAddress;
+import com.leftrr.agentscheduling.dto.im.BotIdentity;
+import com.leftrr.agentscheduling.dto.im.ExtractedResource;
+import com.leftrr.agentscheduling.dto.im.IncomingMessage;
+import com.leftrr.agentscheduling.dto.im.Mention;
 import com.leftrr.agentscheduling.im.Bot;
-import com.leftrr.agentscheduling.im.BotIdentity;
 import com.leftrr.agentscheduling.im.CardScheduler;
 import com.leftrr.agentscheduling.im.CardText;
 import com.leftrr.agentscheduling.im.ClarificationCards;
-import com.leftrr.agentscheduling.im.ExtractedResource;
-import com.leftrr.agentscheduling.im.IncomingMessage;
-import com.leftrr.agentscheduling.im.Mention;
 import com.leftrr.agentscheduling.im.MessageParser;
 import com.leftrr.agentscheduling.im.ProductSpecCards;
 import com.leftrr.agentscheduling.im.ScheduledCardScheduler;
 import com.leftrr.agentscheduling.im.SessionCards;
 import com.leftrr.agentscheduling.im.TaskCards;
 import com.leftrr.agentscheduling.im.ThrottledCardUpdater;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -56,95 +54,52 @@ import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
- * onMessage 主流程编排。对齐 TS 版 src/index.ts L150-766 startConfiguredBot 内的
- * onMessage 闭包；M7 Task 2 实现前半（L151-377：协作识别 → 任务卡发送），
- * Task 3 实现后半（L379-765：进度心跳、执行与收尾链三分支）。
+ * onMessage 主流程编排：协作识别 → 会话解析 → 附件下载 → 任务卡 → CLI 执行 →
+ * 收尾三分支（澄清 / 产品方案 / 正常完成）。执行体在当前线程同步阻塞——
+ * 「CLI 在后台执行」由调用方把每条消息投到独立虚拟线程来表达。
  *
- * <p>Task 3 结构申报：TS {@code void execution.then().catch().finally().catch()} 收尾链
- * 按裁决 6 直译为嵌套 try/catch/finally 模板（then/catch/finally 抛出的异常统一落外层
- * 兜底 catch）；TS 分支内 {@code return} 落 Java 裸 {@code return}（finally 照常执行、
- * 不触发外层兜底，语义等价）；执行体（executeCli/compactCliSession）阻塞当前线程——
- * 按 R11/裁决 5，Task 5 将每条消息投递到独立虚拟线程，同步阻塞即 TS 后台化 Promise 的
- * 等价表达（事件回调由 CliRunner 读循环线程消费，回调尽快返回的语义不变）。
- * 心跳（裁决 7）与 ThrottledCardUpdater（M4 备案组装义务）见方法内注释。
- * adapter 解析经包私有构造注入缝（ClarificationRunner 先例），生产路径按注册表解析。</p>
- *
- * <p>闭包捕获集（构造注入）：TS 闭包捕获 config、bot（方法参）、runtime（内含
- * sessions/teamRegistry/activeRuns/contextWindows/botRuntimes/processedCollaborationTurns/
- * collaborationInbox/clarificationFlows/productSpecFlows 九分量）、collaborationService
- * （后半 dispatch 用，本任务先注入）、agentOsConfig.defaultProductDeliveryMode。
- * 裁决 9：IncomingMessage 未实现 MessageAddress/TopicAddress 接口，两处手工构造。
- * 裁决 11：协作识别正则 {@code /任务编号：([a-f0-9]{12})/} 全角冒号逐字；
- * botRuntimes 注册竞态窗口期消息被忽略 = TS 对齐行为。</p>
- *
- * <p>TS→Java 差异（裁决 5 与申报项）：</p>
- * <ul>
- * <li>受检异常：本方法签名 {@code throws IOException/InterruptedException}（会话读写等
- *     await reject 对位）；虚拟线程投递 + catch-all 包装（文案对齐收尾链兜底
- *     {@code [任务] 回传或收尾失败:}）放 Task 5 组装 BotOptions.MessageListener 时。</li>
- * <li>TS 无值 {@code return} → Java void 方法裸 {@code return}（无调用方消费返回值，
- *     不引入布尔返回）。</li>
- * <li>日志：TS console.log/error/warn → SLF4J info/error/warn（Task 0 裁决 2）。
- *     插值差异备案：TS 模板串对 nullish 打印 {@code undefined}，SLF4J {@code {}}
- *     打印 {@code null}（repo 惯例 TS undefined → null，如 [收到] 的 threadId/rootId）。</li>
- * <li>{@code activeRuns.get(id)?.controller === run} 的 AbortController 同一性比较 →
- *     CancellationToken 引用相等；回滚双分支（replyCard 抛错 / 无 message_id）共用
- *     条件删除 + markSessionIdle。</li>
- * </ul>
+ * <p>收尾链是嵌套 try/catch/finally，穿越序固定：执行主体 → catch（取消/失败两版
+ * 收尾）→ finally（容错清理）→ 外层兜底，三层抛出的异常统一落兜底 catch；
+ * 分支内裸 return 只走 finally、不触发兜底。改动收尾顺序时保持这个穿越关系。</p>
  */
 public final class BotMessageOrchestrator {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(BotMessageOrchestrator.class);
 
-    /** 对齐 TS /任务编号：([a-f0-9]{12})/：全角冒号逐字（裁决 11），String.match → Matcher.find。 */
+    /** 协作识别正则；全角冒号是协作文案的一部分，别顺手改成半角。 */
     private static final Pattern DISPATCH_ID_PATTERN = Pattern.compile("任务编号：([a-f0-9]{12})");
 
-    /** TS setInterval(renderProgress, 1_000) 的 1s 心跳间隔（裁决 7）。 */
+    /** 进度心跳间隔（1s）。 */
     static final long PROGRESS_HEARTBEAT_INTERVAL_MS = 1_000;
 
     private final AppRuntime runtime;
     private final BotRegistry.BotConfig config;
     private final CollaborationService collaborationService;
     private final ProductDeliveryMode defaultProductDeliveryMode;
+    private final Function<CliId, CliAdapter> adapterResolver;
 
     public BotMessageOrchestrator(AppRuntime runtime, BotRegistry.BotConfig config,
             CollaborationService collaborationService,
             ProductDeliveryMode defaultProductDeliveryMode) {
-        this(runtime, config, collaborationService, defaultProductDeliveryMode,
-                CliAdapterRegistry::get);
-    }
-
-    /** 包私有重载：adapter 解析函数可注入（ClarificationRunner 先例），生产路径按注册表解析。 */
-    BotMessageOrchestrator(AppRuntime runtime, BotRegistry.BotConfig config,
-            CollaborationService collaborationService,
-            ProductDeliveryMode defaultProductDeliveryMode,
-            Function<CliId, CliAdapter> adapterResolver) {
         this.runtime = runtime;
         this.config = config;
         this.collaborationService = collaborationService;
         this.defaultProductDeliveryMode = defaultProductDeliveryMode;
-        this.adapterResolver = adapterResolver;
+        this.adapterResolver = CliAdapterRegistry::get;
     }
 
-    private final Function<CliId, CliAdapter> adapterResolver;
-
-    /** TS onMessage 闭包主体（index.ts:150-766）。 */
+    /** 主流程主体：协作识别 → 澄清 → 会话 → 附件 → 命令分流 → 任务卡 → 执行 → 收尾三分支。 */
     public void onMessage(IncomingMessage msg, Bot bot) throws IOException, InterruptedException {
-        onMessage(msg, bot, adapterResolver);
-    }
-
-    /** 主体控制流；adapterResolver 供测试替身替换（M7 Task 3 执行段起消费）。 */
-    void onMessage(IncomingMessage msg, Bot bot, Function<CliId, CliAdapter> adapterResolver)
-            throws IOException, InterruptedException {
-        // L151-152
         String resolved = MessageParser.resolveMentions(msg.text(), msg.mentions());
         String taskId = TopicTask.topicTaskId(new TopicAddress(
                 msg.messageId(), msg.chatId(), msg.threadId(), msg.rootId()));
 
-        // L153-186 bot→bot 协作识别
-        BotRuntime senderRuntime = null; // 后半 catch 分支通知目标用（Task 3），TS 初始 undefined
+        // bot→bot 协作识别
+        BotRuntime senderRuntime = null; // catch 分支通知用；null = 无协作来源
         Collaboration.CollaborationMessage collaboration = null;
         if (msg.senderType().equals("app") || msg.senderType().equals("bot")) {
             BotRuntime currentRuntime = runtime.botRuntimes().get(config.id());
@@ -174,9 +129,7 @@ public final class BotMessageOrchestrator {
                 return;
             }
             String turnKey = Collaboration.collaborationTurnKey(pending);
-            // Task 2 审查 Minor 1 修复：contains→add 两步改原子 add。TS 侧 check→add 位于
-            // 同一同步段（单事件循环）天然原子；Java 每消息一虚拟线程，并发重复协作消息
-            // 在两步间可双通过，CHM keySet 的 add 原子性对齐 TS 同段语义（false = 已存在）
+            // 消息是并发进来的，「先查再加」两步会重复放行，用 add 返回值一步判定
             if (!runtime.processedCollaborationTurns().add(turnKey)) {
                 LOGGER.info("[协作] 忽略重复消息 {}", turnKey);
                 return;
@@ -184,7 +137,6 @@ public final class BotMessageOrchestrator {
             collaboration = pending;
         }
 
-        // L187-197
         boolean hasThread = isPresent(msg.threadId()) || isPresent(msg.rootId());
         SlashCommand command = CommandParser.parseCommand(resolved).orElse(null);
         CliRequest cliRequest = CommandParser.parseCliRequest(resolved).orElse(null);
@@ -196,13 +148,12 @@ public final class BotMessageOrchestrator {
             return;
         }
 
-        // L198-203
         Clarification.ClarificationFlow pendingClarification =
                 !"app".equals(msg.senderType()) && !"bot".equals(msg.senderType()) && command == null
                         ? runtime.clarificationFlows().findForTask(taskId, config.id())
                         : null;
 
-        // L204-214 会话解析（裁决 9：手工构造 MessageAddress）
+        // 会话解析；IncomingMessage 没实现 MessageAddress，这里手工构造
         ResolvedSession resolvedSession = runtime.sessions().resolve(
                 new MessageAddress(msg.messageId(), msg.chatId(), msg.threadId(), msg.rootId()),
                 cliRequest != null ? cliRequest.cliId() : config.defaultCliId(),
@@ -214,41 +165,33 @@ public final class BotMessageOrchestrator {
             session = runtime.sessions().transition(session.id(), SessionStatus.IDLE);
         }
 
-        // L215-216
         CliAdapter cliAdapter = adapterResolver.apply(session.cliId());
         boolean isCompacting = command instanceof SlashCommand.CompactCommand;
 
-        // L217-235 图片/文件下载（单文件失败不中断整体）
+        // 附件下载：单个失败不中断整体
         List<ExtractedResource> resources =
                 MessageParser.extractResourceKeys(msg.messageType(), msg.rawContent());
         List<String> downloadedFiles = new ArrayList<>();
         for (ExtractedResource res : resources) {
             try {
                 String savePath = bot.downloadResource(msg.messageId(), res.key(), res.type().id(),
-                        Path.of("data", "downloads").toString(), res.fileName());
+                        AppPaths.downloadsDirectory(), res.fileName());
                 String absPath = Path.of(savePath).toAbsolutePath().normalize().toString();
                 downloadedFiles.add(absPath);
                 LOGGER.info("  [下载] {} → {}", res.type().id(), absPath);
             } catch (IOException | RuntimeException e) {
-                // 终审 Major-1：生产实现 LarkBot.downloadResource → OapiLarkApi.getResource
-                // 对 REST 失败抛 LarkException（RuntimeException 子类，对齐 TS Error）——
-                // 只接 IOException 会让真实下载失败（token 过期/网络错误/资源过期）击穿
-                // 「单文件失败不中断整体」（TS index.ts L232 下载循环为 catch-all，仅记
-                // 日志）。IOException 保留落盘失败语义，RuntimeException 面覆盖
-                // LarkException 与其他非受检下载失败。
+                // 下载失败会以 LarkException（非受检）抛出，只接 IOException 会漏——
+                // 这里必须保证单个附件挂了不炸整条消息
                 LOGGER.error("  [下载失败] {}: {}", res.key(), e.getMessage());
             }
         }
 
-        // L237-255 taskText 三选一 + 附件段 + buildBotPrompt
         String taskText = composeTaskText(pendingClarification, collaboration, cliRequest,
                 resolved, downloadedFiles);
         String prompt = BotRegistry.buildBotPrompt(config, taskText,
                 runtime.teamRegistry().contextFor(config.id()), defaultProductDeliveryMode);
-        // L256-258
         String taskCardTitle = isCompacting ? "整理上下文" : cliAdapter.displayName();
 
-        // L259-269 调试日志 5 条
         LOGGER.info("[收到] chat={} threadId={} rootId={} sender={}",
                 msg.chatId(), msg.threadId(), msg.rootId(), msg.senderOpenId());
         LOGGER.info("  原文: {}", msg.text());
@@ -257,7 +200,7 @@ public final class BotMessageOrchestrator {
         LOGGER.info("  [会话] {} id={} status={}",
                 isNew ? "新建" : "复用", session.id(), session.status().id());
 
-        // L271-283 命令分流
+        // 命令分流
         CommandHandler.CommandOutcome commandOutcome = CommandHandler.handleSessionCommand(
                 new CommandHandler.HandleSessionCommandOptions(
                         runtime, config, msg, bot, session, cliAdapter, command,
@@ -266,7 +209,7 @@ public final class BotMessageOrchestrator {
             return;
         }
 
-        // L285-308 三个状态守卫
+        // 三个状态守卫
         if (session.status() == SessionStatus.CLOSED) {
             bot.reply(msg.messageId(), "这个话题的会话已经关闭，请新开一个话题继续。", hasThread);
             return;
@@ -280,7 +223,7 @@ public final class BotMessageOrchestrator {
             return;
         }
 
-        // L310-325 旧澄清作废
+        // 旧澄清作废
         if (pendingClarification != null) {
             runtime.clarificationFlows().delete(pendingClarification.token());
             if (pendingClarification.cardMessageId() != null) {
@@ -293,21 +236,21 @@ public final class BotMessageOrchestrator {
             }
         }
 
-        // L327-336 协作工作区切换（session 重新赋值，后半闭包用新值）
+        // 协作工作区切换；session 要重新赋值，后续 lambda 只捕 effectively final
         if (collaboration != null
                 && !session.workspaceDir().equals(collaboration.workspaceDir())) {
             Workspace.ensureWorkspaceDirectory(collaboration.workspaceDir());
             session = runtime.sessions().setWorkspaceDir(session.id(), collaboration.workspaceDir());
         }
 
-        // L338-344 进入执行
+        // 进入执行
         runtime.sessions().transition(session.id(), SessionStatus.ACTIVE);
         CancellationToken run = new CancellationToken();
         ActiveRun activeRun = new ActiveRun(run,
                 collaboration != null ? collaboration.ownerOpenId() : msg.senderOpenId());
         runtime.activeRuns().put(session.id(), activeRun);
 
-        // L346-377 先回复一张卡片，让用户知道任务已经进入执行队列。
+        // 先发任务卡占位，让用户看到任务已进入队列
         String cardId;
         try {
             cardId = bot.replyCard(msg.messageId(),
@@ -330,29 +273,22 @@ public final class BotMessageOrchestrator {
         }
         LOGGER.info("[卡片] 已发送 message_id={} inThread={}", cardId, hasThread);
 
-        // ================================================================
-        // M7 Task 3：进度心跳 + 执行 + 收尾三分支（index.ts L379-765）
-        // ================================================================
+        // 进度心跳 + 执行 + 收尾三分支
 
-        // session 在 L327-336 协作工作区切换后不再重新赋值；Java lambda 只捕 effectively
-        // final 局部变量，此处取最终快照（即 TS let 绑定在闭包执行期的同一取值）
+        // 协作工作区切换后 session 不再重新赋值；lambda 只捕 effectively final，这里取最终快照
         Session execSession = session;
 
-        // L379-385 进度跟踪器。Date.now → System::currentTimeMillis（申报：tracker 仅以
-        // 差值计耗时，wall clock 直译即等价）；`!session.cliSessionId` 按 TS truthiness
-        // 落 isPresent（null/空串都算新会话）。
+        // 时间源只用于算差值，用哪个 wall clock 都行；CLI 会话 ID 空/null 都算新会话
         TaskProgressTracker progress = new TaskProgressTracker(System::currentTimeMillis,
                 runtime.contextWindows().get(execSession.id()),
                 !isPresent(execSession.cliSessionId()));
-        // M4 备案组装义务：ThrottledCardUpdater 必须配 ScheduledCardScheduler 进程级单例
-        // 与单线程 updateExecutor（串行化）；updateExecutor per-task 新建、finally 收尾
-        // （ClarificationRunner 同构先例）。
+        // ThrottledCardUpdater 必须配进程级单例 scheduler + 单线程 executor（更新要串行）；
+        // executor 每任务新建、finally 收尾
         ExecutorService updateExecutor = Executors.newSingleThreadExecutor();
         ThrottledCardUpdater cardUpdater = new ThrottledCardUpdater(
                 card -> bot.updateCard(cardId, card),
                 ScheduledCardScheduler.getInstance(), updateExecutor, 1_000);
-        // L386-396 renderProgress：compact 心跳 detail 固定文案且不推 progress 字段，
-        // 非 compact detail 取快照 current 并推 progress 字段（L396 条件展开）。
+        // compact 心跳 detail 用固定文案、不推进度字段；非 compact 取快照并推
         Runnable renderProgress = () -> {
             TaskProgressSnapshot snapshot = progress.snapshot();
             cardUpdater.push(TaskCards.buildTaskCard(new TaskCards.TaskCardOptions(
@@ -363,15 +299,13 @@ public final class BotMessageOrchestrator {
                     !isCompacting ? snapshot : null,
                     null, null, null, execSession.id())));
         };
-        // L397-398 setInterval(renderProgress, 1_000) + unref() → 裁决 7：ScheduledCardScheduler
-        // 无 fixed-rate，以 self-rescheduling 表达；daemon 调度线程 = unref 等价。
+        // scheduler 不支持 fixed-rate，靠自重排表达固定间隔；daemon 线程不挡 JVM 退出
         ProgressHeartbeat progressHeartbeat = new ProgressHeartbeat(
                 ScheduledCardScheduler.getInstance(), renderProgress,
                 PROGRESS_HEARTBEAT_INTERVAL_MS);
         progressHeartbeat.start();
 
-        // L427-434 事件过滤：非 {tool_start, tool_end, context} 不 accept，accept 后推卡。
-        // 产品方案重试路径（分支二）复用同一消费者（TS 同款内联过滤逐字对应）。
+        // 只放行 tool_start/tool_end/context 喂进度；产品方案重试路径（分支二）复用同一消费者
         Consumer<CliEvent> onProgressEvent = event -> {
             if (!isProgressEvent(event)) {
                 return;
@@ -380,21 +314,15 @@ public final class BotMessageOrchestrator {
             renderProgress.run();
         };
 
-        // L404-765 执行 + 收尾链（裁决 6 嵌套模板）。TS `void execution.then(...)` 的后台化
-        // 在 Java 落为每消息虚拟线程上的同步阻塞（裁决 5：Task 5 负责投递）；事件回调由
-        // CliRunner 读循环线程消费后尽快返回，"CLI 在后台继续执行"的语义不变。
-        // 模板形状：try { try { then 主体（三分支 return 自然落入 finally） }
-        //   catch { 取消/失败 }  finally { clearInterval + 条件 delete + markSessionIdle 容错 } }
-        // catch { 兜底 log }——then/catch/finally 抛出的异常统一落外层兜底。
+        // 收尾链模板见类注释：主体 → catch（取消/失败）→ finally（容错清理）→ 外层兜底
         try {
             try {
-                // L404-434 执行体：compact 走 NativeCompact（结果映射裁决 8），否则 executeCli
+                // compact 走 NativeCompact，否则 executeCli
                 CliRunResult result = isCompacting
                         ? compactRunResult(NativeCompact.compactCliSession(
                                 new NativeCompact.Options(
                                         cliAdapter,
-                                        // 裁决 8：对齐 TS `session.cliSessionId!` 非空断言
-                                        // （compact 必已有 CLI 会话，不可达即崩溃语义对齐）
+                                        // compact 必已有 CLI 会话，非空是前提，违反就快速失败
                                         Objects.requireNonNull(session.cliSessionId()),
                                         session.workspaceDir(),
                                         command instanceof SlashCommand.CompactCommand compactCommand
@@ -405,8 +333,7 @@ public final class BotMessageOrchestrator {
                         : AppExecutions.executeCli(cliAdapter, prompt, session.workspaceDir(),
                                 session.cliSessionId(), run, onProgressEvent);
 
-                // ---- then 前置（L437-444）：clearInterval + 会话回写（均 !isCompacting；
-                //      contextWindowTokens 真值判断（0 不回写）沿裁决 12 口径）----
+                // ---- 停心跳 + 回写会话（compact 不回写；token 数为 0 视为缺失）----
                 progressHeartbeat.stop();
                 if (!isCompacting && isPresent(result.sessionId())) {
                     runtime.sessions().setCliSessionId(session.id(), result.sessionId());
@@ -418,7 +345,7 @@ public final class BotMessageOrchestrator {
                             result.stats().contextWindowTokens());
                 }
 
-                // ---- 分支一：澄清卡收尾（L445-480）----
+                // ---- 分支一：澄清卡收尾 ----
                 Clarification.ClarificationRequest clarificationRequest =
                         !isCompacting && config.skills().contains("grill-me")
                                 ? Clarification.findClarificationRequest(result.toolCalls())
@@ -453,7 +380,7 @@ public final class BotMessageOrchestrator {
                     return;
                 }
 
-                // ---- 分支二：产品方案收尾 + dispatch 合法性校验（L482-585）----
+                // ---- 分支二：产品方案收尾 + dispatch 合法性校验 ----
                 CliRunResult finalResult = result;
                 ProductSpec.ProductSpecRequest productSpecRequest = null;
                 boolean managesProductSpec = !isCompacting
@@ -466,8 +393,7 @@ public final class BotMessageOrchestrator {
                                             cliAdapter,
                                             retryPrompt,
                                             execSession.workspaceDir(),
-                                            // TS `resultSessionId ?? session.cliSessionId`：
-                                            // ?? 只回落 null/undefined（空串不回落）
+                                            // 只有 null 才回落原 CLI ID；空串是有效值不能回落
                                             resultSessionId != null
                                                     ? resultSessionId : execSession.cliSessionId(),
                                             run,
@@ -488,9 +414,8 @@ public final class BotMessageOrchestrator {
                         ? Collaboration.findDispatchTaskRequest(finalResult.toolCalls())
                         : null;
                 if (dispatchRequest != null) {
-                    // L523-546 dispatch 合法性校验（四处 throw 文案逐字）
-                    // TS 读 agentOsConfig.teamLeaderId——TeamRegistry 即以该值构造（L73），
-                    // Java 侧经 runtime.teamRegistry().leaderBotId() 取同一真值（申报）
+                    // dispatch 校验；TeamRegistry 与本配置同源（同一 teamLeaderId 构造），
+                    // leaderBotId() 即真值
                     if (!config.id().equals(runtime.teamRegistry().leaderBotId())) {
                         throw new RuntimeException(
                                 "只有 CEO 助理可以调用 dispatch_task 派发团队任务");
@@ -515,7 +440,7 @@ public final class BotMessageOrchestrator {
                 if (productSpecRequest != null) {
                     if (productSpecRequest
                             instanceof ProductSpec.ProductSpecRequest.Local localRequest) {
-                        // TS `deliveryMode === 'local'`：sealed 两态即两交付模式
+                        // 只有 local 交付需要校验文档真实存在
                         ProductSpecDocuments.assertProductSpecDocuments(session.workspaceDir(),
                                 localRequest);
                     }
@@ -544,14 +469,14 @@ public final class BotMessageOrchestrator {
                     return;
                 }
 
-                // ---- 分支三：正常完成 + 派发/协作续转（L586-701）----
+                // ---- 分支三：正常完成 + 派发/协作续转 ----
                 TaskProgressSnapshot snapshot = progress.snapshot();
                 cardUpdater.finish(isCompacting
                         ? SessionCards.buildSessionNoticeCard(
                                 new SessionCards.SessionNoticeCardOptions(
                                         isPresent(finalResult.answer())
                                                 ? "暂时无需整理" : "上下文已整理",
-                                        // TS `answer || [两段].join('\n\n')`：空串为 falsy 走兜底
+                                        // answer 为 null/空串时走两段兜底文案
                                         isPresent(finalResult.answer())
                                                 ? finalResult.answer()
                                                 : String.join("\n\n",
@@ -570,7 +495,7 @@ public final class BotMessageOrchestrator {
                         bot.reply(msg.messageId(), chunk, hasThread);
                     }
                 }
-                // 注意用原始 result 而非 finalResult（TS L615 同款）
+                // 注意：这里必须用原始 result，不能拿 finalResult
                 LOGGER.info("[CLI] {} 完成 session_id={}", cliAdapter.id().id(),
                         result.sessionId() != null ? result.sessionId() : "(无)");
                 if (collaboration == null) {
@@ -607,7 +532,6 @@ public final class BotMessageOrchestrator {
                                                     : config.collaborationMaxRounds(),
                                             session.workspaceDir()));
                             if (collaboration == null) {
-                                // targetName = botRuntimes.get(target)?.identity.name ?? targetBotId
                                 BotRuntime targetRuntime =
                                         runtime.botRuntimes().get(dispatchRequest.targetBotId());
                                 String targetName = targetRuntime != null
@@ -633,7 +557,7 @@ public final class BotMessageOrchestrator {
                                                 + " 轮上限，请查看上方结果并决定下一步。",
                                         hasThread);
                             } else {
-                                // 回派 reportToBotId：instruction 三段 join('\n\n') 文案逐字
+                                // 回派 reportToBotId
                                 BotRuntime selfRuntime = runtime.botRuntimes().get(config.id());
                                 String selfName = selfRuntime != null
                                         ? selfRuntime.identity().name() : config.id();
@@ -666,20 +590,20 @@ public final class BotMessageOrchestrator {
                     }
                 }
             } catch (Throwable error) {
-                // ---- catch（L703-751）：先 clearInterval，再按 token 取消状态分岔 ----
+                // ---- catch：先停心跳，再按 token 取消状态分岔 ----
                 progressHeartbeat.stop();
                 if (run.isCancelled()) {
                     LOGGER.info("[CLI] 任务已取消");
                     cardUpdater.finish(TaskCards.buildTaskCard(new TaskCards.TaskCardOptions(
                             taskCardTitle, TaskCards.TaskStatus.CANCELLED,
-                            // cancelMode 三态 detail 文案逐字
+                            // detail 三态文案是产品文案
                             activeRun.cancelMode() == CancelMode.CLOSE
                                     ? "本次任务已停止，当前会话已经关闭。"
                                     : isCompacting
                                             ? "整理已停止，当前 CLI 会话没有改变。"
                                             : "本次任务已停止。你可以继续在当前话题里提问。",
                             progress.snapshot(), null, null, null, null)));
-                    // 协作来源 bot 时通知的是 bot 身份（senderRuntime），否则消息发送者
+                    // 有协作来源时通知 bot 身份，否则通知消息发送者
                     Notifications.sendResultNotification(bot, msg.messageId(),
                             senderRuntime != null
                                     ? senderRuntime.identity()
@@ -702,7 +626,7 @@ public final class BotMessageOrchestrator {
                         "任务执行失败，请查看上方错误信息。",
                         hasThread);
             } finally {
-                // ---- finally（L752-762）：clearInterval + 条件 delete + markSessionIdle 容错 ----
+                // ---- finally：停心跳 + 条件 delete + markSessionIdle 容错 ----
                 progressHeartbeat.stop();
                 removeActiveRun(session.id(), run);
                 try {
@@ -713,16 +637,14 @@ public final class BotMessageOrchestrator {
                 updateExecutor.shutdownNow();
             }
         } catch (Throwable error) {
-            // 兜底 catch（L763-765）：then/catch/finally 抛出的异常统一落这里
-            // （终审 Minor-4 备案：本代码库取消走 token 而非线程中断，该链路无
-            // InterruptedException 可达源，故不恢复中断状态）
+            // 兜底：主体/catch/finally 抛的异常统一落这里。取消走 token 不走线程中断，
+            // 链路上没有 InterruptedException，不用恢复中断标志
             LOGGER.error("[任务] 回传或收尾失败: {}", error.getMessage());
         }
     }
 
     /**
-     * TS L237-249 taskText 三选一 + 附件段。包私有供测试直测三选一分支与附件段文案
-     * （前半不落任何下游，编排内不可观测）。
+     * taskText 三选一（澄清答案 / 协作提示词 / 原文）+ 附件段。
      */
     static String composeTaskText(Clarification.ClarificationFlow pendingClarification,
             Collaboration.CollaborationMessage collaboration, CliRequest cliRequest,
@@ -745,7 +667,7 @@ public final class BotMessageOrchestrator {
         return taskText;
     }
 
-    /** TS L353-358 任务卡初始 detail：compact 两态（Codex 有 instructions 走默认策略文案）。 */
+    /** 任务卡初始 detail；compact 且 Codex 带 instructions 时有专门文案。 */
     private static String initialDetail(boolean isCompacting, CliAdapter cliAdapter,
             SlashCommand command) {
         if (!isCompacting) {
@@ -760,7 +682,7 @@ public final class BotMessageOrchestrator {
         return "正在调用 " + cliAdapter.displayName() + " 原生上下文整理";
     }
 
-    /** TS `mentions.map(...).join(', ') || '(无)'`。 */
+    /** 调试行：mentions 拼成 key=name(openId)，空回落 (无)。 */
     private static String mentionsLine(List<Mention> mentions) {
         String joined = mentions.stream()
                 .map(m -> m.key() + "=" + m.name() + "(" + m.openId() + ")")
@@ -768,12 +690,12 @@ public final class BotMessageOrchestrator {
         return joined.isEmpty() ? "(无)" : joined;
     }
 
-    /** TS !!string：null/空串为假。 */
+    /** null/空串均视为缺失。 */
     private static boolean isPresent(String value) {
         return value != null && !value.isEmpty();
     }
 
-    /** TS `activeRuns.get(id)?.controller === run` 才 delete（两处回滚共用）。 */
+    /** 只删自己的 run：token 引用相等才删，别误清别人新注册的。 */
     private void removeActiveRun(String sessionId, CancellationToken run) {
         ActiveRun current = runtime.activeRuns().get(sessionId);
         if (current != null && current.token() == run) {
@@ -781,28 +703,21 @@ public final class BotMessageOrchestrator {
         }
     }
 
-    /** L427-434 事件过滤谓词：仅 {tool_start, tool_end, context} 参与进度聚合（包私有供直测）。 */
+    /** 只有这三类事件参与进度聚合（包私有供直测）。 */
     static boolean isProgressEvent(CliEvent event) {
         return event instanceof CliEvent.ToolStartEvent
                 || event instanceof CliEvent.ToolEndEvent
                 || event instanceof CliEvent.ContextEvent;
     }
 
-    /**
-     * L405-417 compact 结果映射成统一形状（裁决 8）：message null → {@code ""}（TS
-     * {@code result.message ?? ''}）、stats/toolCalls 置 null（TS undefined）。
-     */
+    /** 把 compact 结果对齐成统一执行结果形状：message null 补空串，stats/toolCalls 置 null。 */
     private static CliRunResult compactRunResult(NativeCompact.Result result) {
         return new CliRunResult(result.message() == null ? "" : result.message(),
                 result.sessionId(), null, null);
     }
 
     /**
-     * 进度心跳（裁决 7）：ScheduledCardScheduler 无 fixed-rate，以 self-rescheduling 表达
-     * TS {@code setInterval(renderProgress, 1_000)}——task 尾部重排 schedule(1s)；
-     * {@code stop()} = clearInterval 等价（volatile 停止标志 + cancel 挂起句柄，幂等）。
-     * 调度线程为 ScheduledCardScheduler 的 daemon 单例线程，对齐 TS {@code unref()}。
-     * 包私有供测试以手动调度器钉住自重排/停止机制。
+     * 固定间隔心跳：scheduler 无 fixed-rate，靠任务尾部自重排实现；stop() 幂等。
      */
     static final class ProgressHeartbeat {
         private final CardScheduler scheduler;
@@ -821,7 +736,7 @@ public final class BotMessageOrchestrator {
             scheduleNext();
         }
 
-        /** clearInterval 等价：置停止标志 + 取消挂起中的下一次调度。幂等。 */
+        /** 幂等停止：置标志 + 取消已挂起的下一次调度。 */
         void stop() {
             stopped = true;
             CardScheduler.Cancellable current = pending;
@@ -841,7 +756,7 @@ public final class BotMessageOrchestrator {
                 return;
             }
             render.run();
-            // 渲染期间 stop() 也可能到来：再查一次标志，杜绝停止后继续自重排
+            // 渲染期间可能已 stop()，重排前再查一次标志
             scheduleNext();
         }
     }

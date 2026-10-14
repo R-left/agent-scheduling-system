@@ -1,11 +1,12 @@
 package com.leftrr.agentscheduling.core;
+import com.leftrr.agentscheduling.util.IsoTimeUtil;
 
 import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonValue;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.leftrr.agentscheduling.cli.CliRunResult;
-import com.leftrr.agentscheduling.cli.JsText;
+import com.leftrr.agentscheduling.dto.cli.CliRunResult;
+import com.leftrr.agentscheduling.util.StringUtil;
 
 import java.io.IOException;
 import java.net.URI;
@@ -22,8 +23,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 产品方案提交（request_spec_approval）。对应 TS 版 src/core/product-spec.ts。
- * zod schema 用 JsonNode 手工校验表达（设计裁决 1）：safeParse → parseRequest 返回 null 不抛。
+ * 产品方案提交（request_spec_approval）。
+ * 请求用 JsonNode 手工校验：parseRequest 非法返回 null 不抛。
  */
 public final class ProductSpec {
     public static final String PRODUCT_SPEC_TOOL_NAME = "request_spec_approval";
@@ -32,7 +33,7 @@ public final class ProductSpec {
     private ProductSpec() {}
 
     /**
-     * 对齐 ProductSpecRequest 判别联合：deliveryMode 字面量由 parseRequest 写入
+     * sealed 判别联合：deliveryMode 字面量由 parseRequest 写入
      * （"local" / "lark-doc"），构造点之外无法产生非法值。
      */
     public sealed interface ProductSpecRequest permits ProductSpecRequest.Local, ProductSpecRequest.Lark {
@@ -47,7 +48,7 @@ public final class ProductSpec {
                 String documentUrl) implements ProductSpecRequest {}
     }
 
-    /** 流程状态。对应 TS 的 'pending' | 'approved' | 'expired'。 */
+    /** 流程状态。 */
     public enum SpecStatus {
         PENDING("pending"),
         APPROVED("approved"),
@@ -72,7 +73,7 @@ public final class ProductSpec {
         }
     }
 
-    /** 对齐 CreateProductSpecFlowOptions；ownerUnionId/collaboration null 表示 undefined。 */
+    /** 创建流程的选项；ownerUnionId/collaboration null 表示缺省。 */
     public record CreateFlowOptions(
             String taskId,
             String botId,
@@ -83,8 +84,8 @@ public final class ProductSpec {
             ProductSpecRequest request) {}
 
     /**
-     * 可变流程对象（approve 原地改 status/approvedAt，对齐 TS）。
-     * 字段声明顺序 = 持久化 JSON 键序（Review Focus 3）；序列化走字段（@JsonAutoDetect）。
+     * 可变流程对象（approve 原地改 status/approvedAt）。
+     * 字段声明顺序 = 持久化 JSON 键序；序列化走字段（@JsonAutoDetect）。
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     @JsonAutoDetect(fieldVisibility = JsonAutoDetect.Visibility.ANY,
@@ -108,7 +109,7 @@ public final class ProductSpec {
                     options.request(), SpecStatus.PENDING, null);
         }
 
-        /** 重建构造器：JsonProductSpecFlowStore 加载（Task 9）与 copy 用。 */
+        /** 重建构造器：JsonProductSpecFlowStore 加载与 copy 用。 */
         public ProductSpecFlow(String token, String taskId, String botId, String sessionId,
                 String ownerOpenId, String ownerUnionId,
                 Collaboration.CollaborationOrigin collaboration, ProductSpecRequest request,
@@ -142,7 +143,7 @@ public final class ProductSpec {
         public String approvedAt() { return approvedAt; }
     }
 
-    /** 对齐 ProductSpecRequestSchema.safeParse（discriminatedUnion + .strict() 未知键拒绝）。 */
+    /** 解析 request_spec_approval 入参：未知键拒绝，非法返回 null。 */
     public static ProductSpecRequest parseRequest(JsonNode input) {
         if (input == null || !input.isObject()) {
             return null;
@@ -188,12 +189,12 @@ public final class ProductSpec {
         }
     }
 
-    /** 对齐 WorkspaceDocumentPathSchema：trim、1..240、不以 / 开头、[\\/] 分段不含 '..'。 */
+    /** 工作区文档路径：trim、1..240、不以 / 开头、[\\/] 分段不含 '..'。 */
     static String documentPath(JsonNode node) {
         if (node == null || !node.isTextual()) {
             return null;
         }
-        String value = JsText.jsTrim(node.asText());
+        String value = StringUtil.trim(node.asText());
         if (value.isEmpty() || value.length() > 240) {
             return null;
         }
@@ -209,9 +210,9 @@ public final class ProductSpec {
     }
 
     /**
-     * 对齐 LarkDocumentUrlSchema：合法 URL + pathname 含 /docx/。
-     * 已知分歧：zod z.url() 基于 WHATWG new URL()（容忍首尾空白等）；
-     * Java 用 URI 严格解析，含空格等字符直接判非法——真实飞书文档链接无此形态。
+     * 合法 URL + pathname 含 /docx/。
+     * 边界说明：URI 严格解析，含空格等字符直接判非法（容忍度低于 WHATWG URL）——
+     * 真实飞书文档链接无此形态。
      */
     static String larkDocumentUrl(JsonNode node) {
         if (node == null || !node.isTextual()) {
@@ -229,7 +230,7 @@ public final class ProductSpec {
         return uri.getPath().contains("/docx/") ? node.asText() : null;
     }
 
-    /** 对齐 documentToken()：pathname 形如 /docx/<token> 或 /docx/<token>/ 时提取 token。 */
+    /** pathname 形如 /docx/<token> 或 /docx/<token>/ 时提取 token。 */
     static String documentToken(String documentUrl) {
         try {
             Matcher matcher = DOC_TOKEN.matcher(new URI(documentUrl).getPath());
@@ -256,14 +257,14 @@ public final class ProductSpec {
         return null;
     }
 
-    /** 对齐 isProductSpecOwner()（与 clarification.ts 中的同名函数为 TS 侧的刻意重复）。 */
+    /** 判定操作者是否为流程 owner（与 {@link Clarification} 中的同名判定同构，刻意重复）。 */
     public static boolean isProductSpecOwner(String ownerOpenId, String ownerUnionId,
             String operatorOpenId, String operatorUnionId) {
         if (ownerUnionId != null && !ownerUnionId.isEmpty()
                 && operatorUnionId != null && !operatorUnionId.isEmpty()) {
             return ownerUnionId.equals(operatorUnionId);
         }
-        // 对齐 TS `===`：null === null 亦为 true，不能用 != null && equals 短路
+        // null 与 null 亦视为相等，不能用 != null && equals 短路
         return ownerOpenId == null ? operatorOpenId == null
                 : ownerOpenId.equals(operatorOpenId);
     }
@@ -272,17 +273,17 @@ public final class ProductSpec {
         if (node == null || !node.isTextual()) {
             return null;
         }
-        return JsText.jsTrim(node.asText());
+        return StringUtil.trim(node.asText());
     }
 
-    /** 对齐 .strict()：输入键集合必须与白名单完全一致。 */
+    /** 输入键集合必须与白名单完全一致。 */
     private static boolean exactlyKeys(JsonNode input, Set<String> allowed) {
         Set<String> names = new LinkedHashSet<>();
         input.fieldNames().forEachRemaining(names::add);
         return allowed.equals(names);
     }
 
-    /** 内存流程库（TS ProductSpecFlowStore；持久化子类在 Task 9）。 */
+    /** 内存流程库；持久化由子类 JsonProductSpecFlowStore 承担。 */
     public static class ProductSpecFlowStore {
         private final Map<String, ProductSpecFlow> flows = new LinkedHashMap<>();
 
@@ -294,7 +295,7 @@ public final class ProductSpec {
             }
         }
 
-        /** 同 (taskId, botId) 且 pending 的旧流程置 expired（对齐 TS；approved/expired 不动）。
+        /** 同 (taskId, botId) 且 pending 的旧流程置 expired（approved/expired 不动）。
          * 声明 throws IOException 供 Json 子类持久化失败透传（内存版不抛）。 */
         public ProductSpecFlow create(CreateFlowOptions options) throws IOException {
             for (ProductSpecFlow flow : flows.values()) {
@@ -314,7 +315,7 @@ public final class ProductSpec {
             return flows.get(token);
         }
 
-        /** 对齐 findPendingByDocument()：Objects.equals 对齐 TS `===`（null==null 亦相等，实际不可达）。 */
+        /** 按文档 token 找 pending 流程（null 与 null 亦视为相等，实际不可达）。 */
         public ProductSpecFlow findPendingByDocument(String botId, String fileToken) {
             for (ProductSpecFlow flow : flows.values()) {
                 if (Objects.equals(flow.botId(), botId)
@@ -333,11 +334,11 @@ public final class ProductSpec {
                 return null;
             }
             flow.status = SpecStatus.APPROVED;
-            flow.approvedAt = IsoTime.now();
+            flow.approvedAt = IsoTimeUtil.now();
             return flow;
         }
 
-        /** 对齐 protected snapshot()：structuredClone → 逐字段 copy（其余成员均为不可变 record）。 */
+        /** 逐字段 copy 成快照（flow 含可变字段，必须深拷贝）。 */
         protected List<ProductSpecFlow> snapshot() {
             List<ProductSpecFlow> copy = new ArrayList<>();
             for (ProductSpecFlow flow : flows.values()) {

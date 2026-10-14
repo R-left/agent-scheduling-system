@@ -11,22 +11,18 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
- * 产品方案 local 交付模式下的文档存在性校验。对齐 TS 版 src/app/product-spec-documents.ts（41 行）：
- * spec 判 isFile；tickets 判 isDirectory 且目录下含 .md 文件；IO 异常一律按 missing 处理
- * （对齐 TS catch）；missing 非空时 throw RuntimeException，文案逐字。
+ * local 交付的文档存在性校验：spec 判文件，tickets 判目录下有 .md；
+ * IO 异常一律按 missing 处理，missing 非空即抛（文案为产品文案）。
  */
 public final class ProductSpecDocuments {
 
     private ProductSpecDocuments() {}
 
-    /** TS assertProductSpecDocuments（product-spec-documents.ts:5-40）。 */
     public static void assertProductSpecDocuments(String workspaceDir,
             ProductSpecRequest.Local request) {
         List<String> missing = new ArrayList<>();
 
-        // TS try { stat; isFile } catch { missing }：Java Files.isRegularFile 对不存在/IO
-        // 错误返回 false，但 Path.of 遇非法字符（如 NUL）抛 InvalidPathException，
-        // 与 TS catch 捕获一切一致，归入 missing
+        // Path.of 遇非法字符（如 NUL）抛 InvalidPathException，异常也归入 missing
         try {
             if (!Files.isRegularFile(Path.of(workspaceDir, request.specPath()))) {
                 missing.add("Spec: " + request.specPath());
@@ -39,20 +35,16 @@ public final class ProductSpecDocuments {
             Path ticketsDir = Path.of(workspaceDir, request.ticketsPath());
             boolean hasTicket = false;
             if (Files.isDirectory(ticketsDir)) {
-                // TS readdir withFileTypes 过滤 isFile() && name.endsWith('.md')
-                // ④ 备案：TS Dirent.isFile() 不跟随符号链接，Files.isRegularFile 跟随——
-                // 条目为指向常规文件的符号链接时 Java 判有工单（极端场景偏宽松）
+                // isRegularFile 跟随符号链接，条目是指向常规文件的链接也判有工单
                 try (Stream<Path> entries = Files.list(ticketsDir)) {
                     hasTicket = entries.anyMatch(entry -> Files.isRegularFile(entry)
                             && entry.getFileName().toString().endsWith(".md"));
                 }
             }
-            // TS 判 !isDirectory() || !hasTicket：非目录时 hasTicket 恒 false，两分支合一
             if (!hasTicket) {
                 missing.add("Tickets: " + request.ticketsPath());
             }
         } catch (RuntimeException | IOException e) {
-            // IO 异常（目录不可读等）按 missing 处理，对齐 TS catch
             missing.add("Tickets: " + request.ticketsPath());
         }
 

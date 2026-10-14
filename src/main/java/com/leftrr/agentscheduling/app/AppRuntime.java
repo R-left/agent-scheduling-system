@@ -6,15 +6,13 @@ import com.leftrr.agentscheduling.core.Collaboration;
 import com.leftrr.agentscheduling.core.ProductSpec;
 import com.leftrr.agentscheduling.core.SessionManager;
 import com.leftrr.agentscheduling.core.TeamRegistry;
-
+import com.leftrr.agentscheduling.dto.app.BotRuntime;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 共享运行时上下文。对应 TS 版 src/app/runtime.ts 的 AppRuntime 接口（纯类型，
- * 27 行）。TS 单事件循环下 Map/Set 裸用安全；Java 侧这些容器会被多条虚拟线程
- * 并发读写，按 M6 裁决 2 落并发容器：
+ * 共享运行时上下文。这些容器会被多条虚拟线程并发读写，统一落并发容器：
  * activeRuns / botRuntimes / contextWindows 用 ConcurrentHashMap、
  * processedCollaborationTurns 用 ConcurrentHashMap.newKeySet()。
  */
@@ -29,7 +27,7 @@ public final class AppRuntime {
     private final Clarification.ClarificationFlowStore clarificationFlows;
     private final ProductSpec.ProductSpecFlowStore productSpecFlows;
 
-    /** 全参构造：九字段显式装配（测试注入替身、M7 特殊组装用）。 */
+    /** 全参构造：九字段显式装配（Main 生产装配用）。 */
     public AppRuntime(SessionManager sessions, TeamRegistry teamRegistry,
             Map<String, ActiveRun> activeRuns, Map<String, Long> contextWindows,
             Map<String, BotRuntime> botRuntimes, Set<String> processedCollaborationTurns,
@@ -47,10 +45,7 @@ public final class AppRuntime {
         this.productSpecFlows = productSpecFlows;
     }
 
-    /**
-     * 默认构造：内存容器按裁决 2 新建并发容器，inbox 与两个 flow store 新建内存版
-     * （productSpecFlows 生产组装时由 M7 传 JsonProductSpecFlowStore 子类）。
-     */
+    /** 默认构造：内存容器统一新建并发容器，productSpecFlows 生产组装时换持久化子类。 */
     public AppRuntime(SessionManager sessions, TeamRegistry teamRegistry) {
         this(sessions, teamRegistry,
                 new ConcurrentHashMap<>(),

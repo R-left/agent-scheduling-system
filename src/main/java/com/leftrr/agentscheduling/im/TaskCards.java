@@ -3,32 +3,28 @@ package com.leftrr.agentscheduling.im;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.leftrr.agentscheduling.cli.CliRunStats;
-import com.leftrr.agentscheduling.core.TaskActivity;
-import com.leftrr.agentscheduling.core.TaskProgressSnapshot;
+import com.leftrr.agentscheduling.dto.cli.CliRunStats;
+import com.leftrr.agentscheduling.dto.core.TaskActivity;
+import com.leftrr.agentscheduling.dto.core.TaskProgressSnapshot;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
 
 /**
- * 对齐 TS 版 src/im/card.ts 的任务卡 buildTaskCard（M4 Task 4）。
- *
- * <p>卡片 JSON 用 ObjectNode 手工构造，put 顺序 = TS 对象字面量键序（设计裁决 1）。
- * 可空分量 null 表示 TS undefined；TS 真值检查（{@code ? :} / {@code ||}）落为
- * {@code != null && !isEmpty()}，TS nullish 检查（{@code ??}）落为 {@code != null}。
- * 长度阈值沿用 CardText 的 code unit 口径（R7）。</p>
+ * 任务卡。卡片 JSON 手工构造，键序固定，别调。
+ * 长度阈值统一走 CardText 的 code unit 口径。
  */
 public final class TaskCards {
 
-    /** card.ts:263 usageMeta 剥前缀 {@code /^当前上下文(?:约)?\s+/}。 */
+    /** 剥掉 formatContextUsage 产出的「当前上下文」前缀。 */
     private static final Pattern CONTEXT_PREFIX = Pattern.compile("^当前上下文(?:约)?\\s+");
 
     private static final JsonNodeFactory FACTORY = JsonNodeFactory.instance;
 
     private TaskCards() {}
 
-    /** card.ts:10 TaskStatus；id 对齐 TS 字符串字面量。 */
+    /** id 是写进卡片的字符串字面量。 */
     public enum TaskStatus {
         RUNNING("running"),
         SUCCESS("success"),
@@ -46,7 +42,6 @@ public final class TaskCards {
         }
     }
 
-    /** card.ts:12-21 TaskCardOptions；可空分量 null = TS undefined。 */
     public record TaskCardOptions(
             String title,
             TaskStatus status,
@@ -57,7 +52,7 @@ public final class TaskCards {
             String technicalDetail,
             String abortSessionId) {}
 
-    /** card.ts:66-71 STATUS_STYLE。 */
+    /** 状态 → 卡片模板色与标签。 */
     private record StatusStyle(String template, String label) {}
 
     private static StatusStyle styleOf(TaskStatus status) {
@@ -68,8 +63,6 @@ public final class TaskCards {
             case CANCELLED -> new StatusStyle("grey", "已取消");
         };
     }
-
-    // ---- card.ts:348-368 buildTaskCard ----
 
     public static ObjectNode buildTaskCard(TaskCardOptions options) {
         StatusStyle style = styleOf(options.status());
@@ -85,7 +78,6 @@ public final class TaskCards {
         header.put("template", style.template());
         header.set("title", headerTitle);
         ArrayNode elements = FACTORY.arrayNode();
-        // T4②：逐 add 改为 addAll（纯惯用法，语义不变）
         elements.addAll(options.status() == TaskStatus.RUNNING
                 ? buildRunningElements(options)
                 : buildFinishedElements(options));
@@ -100,8 +92,6 @@ public final class TaskCards {
         card.set("body", body);
         return card;
     }
-
-    // ---- card.ts:191-239 buildRunningElements ----
 
     private static List<ObjectNode> buildRunningElements(TaskCardOptions options) {
         TaskProgressSnapshot progress = options.progress();
@@ -158,14 +148,10 @@ public final class TaskCards {
         return elements;
     }
 
-    // ---- card.ts:241-332 buildFinishedElements ----
-
     private static List<ObjectNode> buildFinishedElements(TaskCardOptions options) {
         TaskProgressSnapshot progress = options.progress();
         CliRunStats stats = options.stats();
-        // card.ts:243 stats?.durationMs ?? progress?.elapsedMs（nullish：stats 存在但 durationMs 缺 → 取 progress）。
-        // 差异注释：勿合并为嵌套三元——JLS 15.25 条件表达式在 long 与 Long 混臂时按数值提升
-        // 整体视为 long，null 臂会被自动拆箱（null.longValue() NPE），必须 if/else 显式赋值。
+        // durationMs 缺失时回退 elapsedMs；必须 if/else——嵌套三元在 long/Long 混臂时会自动拆箱，null 直接 NPE
         Long durationMs;
         if (stats != null && stats.durationMs() != null) {
             durationMs = stats.durationMs().longValue();
@@ -173,7 +159,7 @@ public final class TaskCards {
             durationMs = progress != null ? progress.elapsedMs() : null;
         }
         Long totalTokens = CardText.usageTotal(stats);
-        // card.ts:245-248：used 取 progress 优先、window 取 stats 优先（TS 源码原样，勿"修正"）
+        // used 看 progress、window 看 stats，来源不对称是有意的
         String context = CardText.formatContextUsage(
                 progress != null && progress.contextUsedTokens() != null
                         ? progress.contextUsedTokens()
@@ -265,7 +251,6 @@ public final class TaskCards {
 
     // ---- 元素构造辅助 ----
 
-    /** {tag:'markdown', content}（card.ts 键序）。 */
     private static ObjectNode markdown(String content) {
         ObjectNode node = FACTORY.objectNode();
         node.put("tag", "markdown");
@@ -273,7 +258,7 @@ public final class TaskCards {
         return node;
     }
 
-    /** card.ts:222-237 停止按钮（键序 tag/text/type/width/size/behaviors）。 */
+    /** 停止按钮；键序固定。 */
     private static ObjectNode abortButton(String sessionId) {
         ObjectNode text = FACTORY.objectNode();
         text.put("tag", "plain_text");
@@ -296,7 +281,7 @@ public final class TaskCards {
         return button;
     }
 
-    /** card.ts:279-289 / 300-310 / 319-329 collapsible_panel（键序 tag/expanded/header/vertical_spacing/padding/elements）。 */
+    /** 键序固定。 */
     private static ObjectNode collapsiblePanel(String headerText, String content) {
         ArrayNode inner = FACTORY.arrayNode();
         inner.add(markdown(content));
@@ -311,6 +296,6 @@ public final class TaskCards {
     }
 
     private static String toolIcon(String toolName) {
-        return CardText.TOOL_ICONS.getOrDefault(toolName, "⚙️"); // T4①：消费 CardText 公开表
+        return CardText.TOOL_ICONS.getOrDefault(toolName, "⚙️");
     }
 }

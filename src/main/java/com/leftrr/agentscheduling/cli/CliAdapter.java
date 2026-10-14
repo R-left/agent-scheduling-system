@@ -1,8 +1,11 @@
 package com.leftrr.agentscheduling.cli;
 
+import com.leftrr.agentscheduling.dto.cli.CliCompactPlan;
+import com.leftrr.agentscheduling.dto.cli.CliEvent;
+import com.leftrr.agentscheduling.dto.cli.CliId;
 import java.util.List;
 
-/** 对齐 TS CliAdapter 接口。parseEvents 对无法解析的行返回空列表，绝不抛异常。 */
+/** CLI 执行引擎适配器接口。parseEvents 对无法解析的行返回空列表，绝不抛异常。 */
 public interface CliAdapter {
     CliId id();
     String command();
