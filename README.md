@@ -62,6 +62,10 @@ java -jar target/agent-os.jar
 
 在飞书话题群里 @ 对应 bot 说话即可；bot 会话按「chatId + threadId」隔离，同一话题内上下文连续。
 
+@bot 下单后，执行过程以任务卡实时回执，跑完在卡上给出结论与验证记录：
+
+![CEO 助理任务执行结果卡](docs/images/ceo-task-result-card.jpg)
+
 ### 斜杠命令
 
 | 命令 | 作用 |
