@@ -21,7 +21,7 @@ import com.leftrr.agentscheduling.im.Bot;
 import com.leftrr.agentscheduling.dto.im.BotIdentity;
 import com.leftrr.agentscheduling.im.BotOptions;
 import com.leftrr.agentscheduling.im.FeishuBots;
-import com.leftrr.agentscheduling.mcp.HttpAppToolsServer;
+import com.leftrr.agentscheduling.mcp.EmbeddedTomcatServer;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -125,14 +125,14 @@ public final class Main {
     }
 
     /**
-     * 启动内置McpServer
+     * 启动内置McpServer服务
      */
     static void startMcpServer() {
-        HttpAppToolsServer appToolsServer = HttpAppToolsServer.start();
+        EmbeddedTomcatServer embeddedTomcatServer = EmbeddedTomcatServer.start();
         // 停机钩子,关闭tomcat服务
         Runtime.getRuntime().addShutdownHook(
-                Thread.ofPlatform().unstarted(appToolsServer::stop));
-        LOGGER.info("[MCP] agent_scheduling 工具端点 {}（内嵌 HTTP，长驻）", appToolsServer.url());
+                Thread.ofPlatform().unstarted(embeddedTomcatServer::stop));
+        LOGGER.info("[MCP] agent_scheduling 工具端点 {}（内嵌 HTTP，长驻）", embeddedTomcatServer.url());
     }
 
     /**

@@ -8,7 +8,7 @@ import java.util.List;
 /**
  * 跨平台 CLI 子进程 spawn 与进程树级 kill。
  * Windows 下 claude/codex 常是 .cmd 批处理，必须经 cmd 启动；prompt 走 stdin，
- * 命令行里只剩无空格的标志参数，shell 拼接不会破坏它们。
+ * 命令行里的标志参数经 quoteForCmd 转义（含空白或双引号的都会包引号），shell 拼接不会破坏它们。
  */
 public final class CliProcess {
     private CliProcess() {}
@@ -17,7 +17,7 @@ public final class CliProcess {
         return "win32".equals(CliPromptInput.currentPlatform());
     }
 
-    /** Windows shell（cmd）命令行拼接。参数含空白或为空时加引号。 */
+    /** Windows shell（cmd）命令行拼接。参数含空白、双引号或为空时加引号。 */
     static String windowsShellCommandLine(String command, List<String> args) {
         List<String> parts = new ArrayList<>();
         parts.add(command);
@@ -32,9 +32,15 @@ public final class CliProcess {
         return sb.toString();
     }
 
+    /**
+     * 含空白或双引号的参数必须包引号并转义内部引号（\"）。只看空格是坑：
+     * cmd 会把未加引号参数里的裸双引号整个剥掉——claude 的 --mcp-config 内联
+     * JSON、codex 的 -c TOML 值都含引号，裸传到 CLI 手里就成了没引号的残串，
+     * JSON/TOML 解析失败（claude 还会回退把整串当配置文件路径找文件）。
+     */
     private static String quoteForCmd(String value) {
         if (value != null && !value.isEmpty()
-                && value.chars().noneMatch(c -> c == ' ' || c == '\t')) {
+                && value.chars().noneMatch(c -> c == ' ' || c == '\t' || c == '"')) {
             return value;
         }
         String safe = value == null ? "" : value.replace("\"", "\\\"");
